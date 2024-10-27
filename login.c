@@ -48,11 +48,22 @@ typedef struct Block {
     struct Block *next;
 } Block;
 
+// Active user structure
+typedef struct ActiveUser {
+    char username[MAX_USERNAME_LENGTH];
+    time_t login_time;
+    time_t logout_time;
+    struct ActiveUser *next;
+} ActiveUser;
+
 // Head of the blockchain
 Block *blockchain = NULL;
 
 // Head of the pending transactions list
 Transaction *pending_transactions = NULL;
+
+// Head of the active users list
+ActiveUser *active_users_list = NULL;
 
 // Function prototypes
 int is_user_in_group(const char *username, const char *groupname);
@@ -297,36 +308,53 @@ int is_user_blocked(const char *username) {
 
 // Function to add a user to the active users list
 void add_to_active_users(const char *username) {
-    FILE *active_users_file = fopen(ACTIVE_USERS_FILE, "a");
-    if (!active_users_file) {
-        printf("Unable to open active users file.\n");
+    ActiveUser *new_user = (ActiveUser *)malloc(sizeof(ActiveUser));
+    if (!new_user) {
+        printf("Failed to allocate memory for active user.\n");
         return;
     }
-
-    time_t now = time(NULL);
-    fprintf(active_users_file, "%s %ld\n", username, now);
-    fclose(active_users_file);
+    strncpy(new_user->username, username, MAX_USERNAME_LENGTH - 1);
+    new_user->username[MAX_USERNAME_LENGTH - 1] = '\0';
+    new_user->login_time = time(NULL);
+    new_user->logout_time = 0;
+    new_user->next = active_users_list;
+    active_users_list = new_user;
 }
 
-// Function to display currently logged-in users
+// Function to update user's logout time
+void update_logout_time(const char *username) {
+    ActiveUser *current = active_users_list;
+    while (current) {
+        if (strcmp(current->username, username) == 0 && current->logout_time == 0) {
+            current->logout_time = time(NULL);
+            break;
+        }
+        current = current->next;
+    }
+}
+
+// Function to display active users with login and logout times
 void display_active_users() {
-    FILE *active_users_file = fopen(ACTIVE_USERS_FILE, "r");
-    if (!active_users_file) {
-        printf("No users are currently logged in.\n");
+    if (!active_users_list) {
+        printf("No users have logged in.\n");
         return;
     }
 
-    char username[MAX_USERNAME_LENGTH];
-    time_t login_time;
+    printf("\nUser Login and Logout Times:\n");
+    printf("-----------------------------\n");
 
-    printf("\nCurrently Logged-in Users:\n");
-    printf("----------------------------\n");
-
-    while (fscanf(active_users_file, "%99s %ld\n", username, &login_time) != EOF) {
-        printf("Username: %s, Logged in at: %s", username, ctime(&login_time));
+    ActiveUser *current = active_users_list;
+    while (current) {
+        printf("Username: %s\n", current->username);
+        printf("Logged in at: %s", ctime(&current->login_time));
+        if (current->logout_time != 0) {
+            printf("Logged out at: %s", ctime(&current->logout_time));
+        } else {
+            printf("Currently logged in.\n");
+        }
+        printf("-----------------------------\n");
+        current = current->next;
     }
-
-    fclose(active_users_file);
 }
 
 // Function to handle user login
@@ -390,6 +418,9 @@ void user_logout() {
         printf("No user is currently logged in.\n");
         return;
     }
+
+    // Update logout time
+    update_logout_time(current_user);
 
     // Clear current_user and current_role
     printf("User %s has been logged out successfully.\n", current_user);
@@ -511,9 +542,10 @@ void view_transactions() {
     }
 }
 
-// Function to view all transactions
+// Function to view all transactions (receipt)
 void view_all_transactions() {
     Block *current_block = blockchain;
+    printf("\n--- All Transactions ---\n");
     while (current_block != NULL) {
         for (int i = 0; i < current_block->transaction_count; i++) {
             Transaction *tx = &current_block->transactions[i];
@@ -538,6 +570,17 @@ void view_all_transactions() {
     }
 }
 
+// Function to clean up active users list
+void cleanup_active_users() {
+    ActiveUser *current = active_users_list;
+    while (current) {
+        ActiveUser *temp = current;
+        current = current->next;
+        free(temp);
+    }
+    active_users_list = NULL;
+}
+
 // Function to clean up blockchain
 void cleanup_blockchain() {
     Block *current = blockchain;
@@ -549,9 +592,28 @@ void cleanup_blockchain() {
     blockchain = NULL;
 }
 
+// Function to clean up pending transactions
+void cleanup_pending_transactions() {
+    Transaction *current = pending_transactions;
+    while (current) {
+        Transaction *temp = current;
+        current = current->next;
+        free(temp);
+    }
+    pending_transactions = NULL;
+}
+
 // Function to clean up active users on program exit
 void cleanup_and_exit(int signum) {
     printf("\nProgram terminated. Cleaning up active users and blockchain.\n");
+
+    // Update logout time for current user
+    if (strlen(current_user) > 0) {
+        update_logout_time(current_user);
+    }
+
+    cleanup_active_users();
+    cleanup_pending_transactions();
     cleanup_blockchain();
     exit(0);
 }
