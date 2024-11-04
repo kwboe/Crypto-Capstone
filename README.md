@@ -12,7 +12,8 @@ their capabilities.
 ## Directions
 Pre-face: Ideally this should be run on a minimum of 2 machines, 1 as the starter node and 1 as the 1st node.
 On the starter node, the create_account.cpp should be compiled. (g++ create_account.c -o create_account -lcrypt) In order for this to work, the program must be run with sudo or as a root service.
-On the 1st node, the Listener (Shadow Listener, Password Listener), and rolelog.c shoud be compiled. (g++ listener.cpp -o listener and gcc login.c -o login -lcrypt -lssl -lcrypto)
+On the 1st and 2nd Node we need to add a new library to add our keccak functionality. To do this we need to clone the https://github.com/KeccakTeam/KeccakCodePackage, which is the Official open source Keccak github. Do do this, follow the steps on the readme there. Make sure to move the library and headers to the correct file path. (usr/local/include for the headers and /usr/local/lib for the library).
+On the 1st node, the Listener (Shadow Listener, Password Listener), and rolelog.c shoud be compiled. (g++ listener.cpp -o listener and gcc keccaklogger.c -o keccaklogger -I/usr/local/include -lcrypt -lXKCP)
 
 1. On the first node, the Listener should be running and ready to recieve information. (either as a service or with sudo)
 2. On the starter, the create_account program should be running and ready to be connected to recieve the users username and password. (Ideally a service or with sudo)
