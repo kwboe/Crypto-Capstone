@@ -12,10 +12,15 @@ their capabilities.
 ## Directions
 Pre-face: Ideally this should be run on a minimum of 2 machines, 1 as the starter node and 1 as the 1st node.
 On the starter node, the create_account.cpp should be compiled. (g++ create_account.c -o create_account -lcrypt) In order for this to work, the program must be run with sudo or as a root service.
-On the 1st and 2nd Node we need to add a new library to add our keccak functionality. To do this we used the https://github.com/KeccakTeam/KeccakCodePackage, which is the Official open source Keccak github. If you want to create your own library, follow the steps on the readme there. We will provide the library and header files required (libXKCP.a and the .h files). Make sure to move the library and headers to the correct file path. (usr/local/include for the headers and /usr/local/lib for the library).
-On the 1st node, the Listener (Shadow Listener, Password Listener), and keccaklogger.c shoud be compiled. (g++ listener.cpp -o listener and gcc keccaklogger.c -o keccaklogger -I/usr/local/include -lcrypt -lXKCP)
+On the 1st and 2nd Node we need to add a new library to add our keccak functionality. 
+To do this we used the https://github.com/KeccakTeam/KeccakCodePackage, which is the Official open source Keccak github. If you want to create your own library, follow the steps on the readme there. We will provide the library and header files required (libXKCP.a and the .h files). Make sure to move the library and headers to the correct file path. (usr/local/include for the headers and /usr/local/lib for the library).
+On the 1st node, the Listener and keccaklogin.c shoud be compiled. (g++ listener.cpp -o listener and gcc keccaklogin.c -o keccaklogin -I/usr/local/include -lcrypt -lXKCP)
 
 1. On the first node, the Listener should be running and ready to recieve information. (either as a service or with sudo)
 2. On the starter, the create_account program should be running and ready to be connected to recieve the users username and password. (Ideally a service or with sudo)
-3. On the first node, the listener should recieve the username and password in the form of an /etc/shadow and /etc/passwd entry, then input those into their respective files.
-4. On the first node, use the login program to login to the first node.
+   - to connect to the starter node, use nc <the ip of the starter node> <port specified>
+   - Once the connection is established, provide the username and password in this specified format. (username:password)
+4. On the first node, the listener should recieve the username and password in the form of an /etc/shadow and /etc/passwd entry, then input those into their respective files.
+5. On the first node, use the login program to login to the first node.
+   - This should be the keccaklogin program you compiled earlier. Use sudo ./keccaklogin (or whatever you named it) to access the menu. (Use sudo if you did not make it a root service)
+   - Once on the menu, use the username and password you created to login via the login interface.
