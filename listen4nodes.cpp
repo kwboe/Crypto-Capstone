@@ -70,11 +70,10 @@ int main() {
 
 	std::cout << "Server listening on port 9999" << std::endl;
 
-  // Run loop to accept connections
+        // Run loop to accept connections
 	while (true) {
 		struct sockaddr_in clientaddr;
 		socklen_t clientaddrlength = sizeof(clientaddr);
-
 		
 		int clientSocket = accept(serverSocket, (struct sockaddr*)&clientaddr, &clientaddrlength);
 		if (clientSocket < 0) { // if not able to connect, output, exit the current loop, and continue the loop
