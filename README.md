@@ -11,7 +11,7 @@ their capabilities.
 
 ## Directions
 Pre-face: Ideally this should be run on a minimum of 2 machines, 1 as the starter node and 1 as the 1st node.
-On the starter node, the create_account.cpp should be compiled. (g++ create_account.c -o create_account -lcrypt) In order for this to work, the program must be run with sudo or as a root service. Additionally, the listen4nodes.cpp should also be compiled, as it is how the nodes will tell the starter node that it is a node (g++ listen4nodes.cpp -o listen4nodes -lcrypt).
+On the starter node, the create_account.cpp should be compiled. (g++ create_account.cpp -o create_account -lcrypt) In order for this to work, the program must be run with sudo or as a root service and line 185 of the code must be changed to reflect the path of the .txt file you will place the node's IP addresses in. Additionally, the listen4nodes.cpp should also be compiled, as it is how the nodes will tell the starter node that it is a node (g++ listen4nodes.cpp -o listen4nodes -lcrypt).
 On the 1st and 2nd Node we need to add a new library to add our keccak functionality. 
 To do this we used the https://github.com/KeccakTeam/KeccakCodePackage, which is the Official open source Keccak github. If you want to create your own library, follow the steps on the readme there. We will provide the library and header files required (libXKCP.a and the .h files). Make sure to move the library and headers to the correct file path. (usr/local/include for the headers and /usr/local/lib for the library).
 On the 1st node, the Listener and keccaklogin.c shoud be compiled. (g++ listener.cpp -o listener and gcc keccaklogin.c -o keccaklogin -I/usr/local/include -lcrypt -lXKCP)
