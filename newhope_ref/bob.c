@@ -31,7 +31,7 @@ int main() {
     }
 
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
+    server_addr.sin_port = htons(7778);
     server_addr.sin_addr.s_addr = inet_addr("10.233.105.182");  
 
     // Connect to server
