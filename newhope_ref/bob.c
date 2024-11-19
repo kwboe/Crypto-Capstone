@@ -1,4 +1,3 @@
-
 #include "api.h"
 #include "poly.h"
 #include "randombytes.h"
@@ -8,9 +7,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#define PORT 7778
-
-void print_hex(const char *label, unsigned char *data, size_t len) {
+void print_hex(const char *label, unsigned char *data, size_t len) { // print out hex values of keys/ciphertext for debugging
     printf("%s: ", label);
     for (size_t i = 0; i < len; i++) {
         printf("%02x", data[i]);
@@ -21,14 +18,11 @@ void print_hex(const char *label, unsigned char *data, size_t len) {
 int main() {
     int sock;
     struct sockaddr_in server_addr;
-    unsigned char pk[CRYPTO_PUBLICKEYBYTES];
-    unsigned char sk[CRYPTO_SECRETKEYBYTES];
-    unsigned char key_b[CRYPTO_BYTES];
-    unsigned char recv_pk[CRYPTO_PUBLICKEYBYTES];
-    unsigned char ciphertext[CRYPTO_CIPHERTEXTBYTES];
-
-    crypto_kem_keypair(pk, sk); // generate public key
-    printf("Bob: Public key generated.\n");
+    unsigned char pk[CRYPTO_PUBLICKEYBYTES]; // Bob's public key
+    unsigned char sk[CRYPTO_SECRETKEYBYTES]; // Bob's secret key
+    unsigned char key_b[CRYPTO_BYTES]; // Derived shared secret
+    unsigned char recv_pk[CRYPTO_PUBLICKEYBYTES]; // Alice's public key
+    unsigned char ciphertext[CRYPTO_CIPHERTEXTBYTES]; // Shared secret encrypted with Alice's public key
 
     // Create socket
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
@@ -45,30 +39,32 @@ int main() {
         perror("Connection failed");
         return -1;
     }
-
-    // Send Bob's public key to Alice
+    
+    // Bob generates his public key with the newhope function crypto_kem_keypair
+    crypto_kem_keypair(pk, sk); 
+    printf("Bob: Public key generated.\n");
+    
+    // Sends his public key to Alice
     send(sock, pk, CRYPTO_PUBLICKEYBYTES, 0);
     printf("Bob: Public key sent to Alice.\n");
     print_hex("Bob's Public key", pk, CRYPTO_PUBLICKEYBYTES);
 
-    // Receive Alice's public key
+    // Receive Alice's public key from Alice
     recv(sock, recv_pk, CRYPTO_PUBLICKEYBYTES, 0);
     printf("Bob: Received Alice's public key.\n");
     print_hex("Alice's Public key", recv_pk, CRYPTO_PUBLICKEYBYTES);
 
-    // Derive shared secret using Alice's public key and Bob's private key
+    // Derives random shared secret and encrypts it with Alice's public key
     crypto_kem_enc(ciphertext, key_b, recv_pk);
     printf("Bob: Shared secret derived and encrypted with Alice's public key.\n");
 
-    // Send the ciphertext to Alice
+    // Sends the shared secret to Alice
     send(sock, ciphertext, CRYPTO_CIPHERTEXTBYTES, 0);
     printf("Bob: Ciphertext sent to Alice.\n");
     print_hex("Ciphertext", ciphertext, CRYPTO_CIPHERTEXTBYTES);
-
-    // Print Bob's shared secret
     print_hex("Bob's Shared Secret", key_b, CRYPTO_BYTES);
 
-    // Clean up
+    // Closes socket
     close(sock);
     return 0;
 } 
