@@ -2,7 +2,7 @@
 
 Contributors: Cowen Bland, Kyle Boe, Felix Hernandez-Kossick, Torin Kearney
 Advisor: LT. Maxam
-Key Words: Quantum Secure, Quantum Cryptology
+Key Words: Quantum Secure
 
 ## Description
 This is a project to try and implement multiple quantum secure algorithms in a practical sense. To do this we chose to implement the said
