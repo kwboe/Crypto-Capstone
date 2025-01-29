@@ -1,5 +1,3 @@
-// Filename: kingcoin.c
-
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,8 +15,7 @@
 #include <openssl/evp.h>  // For SHA3-512 via OpenSSL EVP interface
 #include <security/pam_appl.h>  // For PAM authentication
 
-// Include the OQS library header for Dilithium2
-#include <oqs/oqs.h>
+#include <oqs/oqs.h>      // OQS library for Dilithium2
 
 #define MAX_USERNAME_LENGTH 100
 #define MAX_PASSWORD_LENGTH 100
@@ -26,152 +23,158 @@
 #define BLOCKS_DIR "blocks"
 #define TRANSACTION_LOG_FILE "transaction_log.txt"
 #define MAX_TRANSACTIONS_PER_BLOCK 5
-#define MAX_VALIDATORS_PER_BLOCK 3 // Adjust as needed
+#define MAX_VALIDATORS_PER_BLOCK 3
 
-// Global variables to store the currently logged-in user and role
+// -- SIMPLE CONSTANT FOR SLASHING PENALTY --
+#define SLASH_PENALTY 5.0   // Slash 5 tokens from stake on double-sign attempt
+
+// Global user/role
 char current_user[MAX_USERNAME_LENGTH] = "";
-char current_role[20] = ""; // User role: user, validator, blockuser
+char current_role[20] = "";
 
-// Enum for transaction types
+// Enum
 typedef enum {
     TRANSACTION_NORMAL
 } TransactionType;
 
-// Structure to represent a transaction
+// Transaction struct
 typedef struct Transaction {
-    int id;                                        // Unique transaction ID
-    TransactionType type;                          // Type of transaction
-    char sender[MAX_USERNAME_LENGTH];              // Sender's username
-    char recipient[MAX_RECIPIENT_LENGTH];          // Recipient's username
-    double amount;                                 // Transaction amount
-    time_t timestamp;                              // Timestamp of the transaction
-    struct Transaction *next;                      // Pointer to the next transaction (for pending transactions list)
+    int id;
+    TransactionType type;
+    char sender[MAX_USERNAME_LENGTH];
+    char recipient[MAX_RECIPIENT_LENGTH];
+    double amount;
+    time_t timestamp;
+    struct Transaction *next;
 } Transaction;
 
-// Structure to represent a block in the blockchain
+// Block struct
 typedef struct Block {
-    int index;                                    // Block index in the blockchain
-    time_t timestamp;                             // Timestamp of the block creation
-    Transaction transactions[MAX_TRANSACTIONS_PER_BLOCK]; // Array of transactions in the block
-    int transaction_count;                        // Number of transactions in the block
-    unsigned char previous_hash[64];              // Hash of the previous block (64 bytes for SHA3-512)
-    unsigned char hash[64];                       // Hash of the current block
-    unsigned int hash_len;                        // Length of the hash
+    int index;
+    time_t timestamp;
+    Transaction transactions[MAX_TRANSACTIONS_PER_BLOCK];
+    int transaction_count;
+    unsigned char previous_hash[64];
+    unsigned char hash[64];
+    unsigned int hash_len;
 
-    int validator_count; // Number of validators
-    char validators[MAX_VALIDATORS_PER_BLOCK][MAX_USERNAME_LENGTH]; // Validators' usernames
+    int validator_count;
+    char validators[MAX_VALIDATORS_PER_BLOCK][MAX_USERNAME_LENGTH];
 
-    unsigned char signatures[MAX_VALIDATORS_PER_BLOCK][5000]; // Signatures from validators
-    size_t signature_lens[MAX_VALIDATORS_PER_BLOCK]; // Lengths of the signatures
+    unsigned char signatures[MAX_VALIDATORS_PER_BLOCK][5000];
+    size_t signature_lens[MAX_VALIDATORS_PER_BLOCK];
 
-    struct Block *next;                           // Pointer to the next block in the blockchain
+    struct Block *next;
 } Block;
 
-// Structure to represent a user
+// User struct
 typedef struct User {
     char username[MAX_USERNAME_LENGTH];
     double balance;
-    double stake;  // ADDED: Amount of tokens staked for PoS
-    unsigned char public_key[5000]; // Adjusted size for Dilithium2 public key
-    size_t public_key_len;          // Store the length of the public key
+    double stake;  
+    unsigned char public_key[5000];
+    size_t public_key_len;
     struct User *next;
 } User;
 
-// Head pointers for the blockchain, pending transactions list, and user list
+// Global pointers
 Block *blockchain = NULL;
 Transaction *pending_transactions = NULL;
-User *users = NULL; // Head of the user list
-
-// Global transaction ID counter
+User *users = NULL;
 int last_transaction_id = 0;
-
-// Global pending block
 Block *pending_block = NULL;
 
-// Function prototypes
+// Prototypes
+int ensure_blocks_directory();
 int is_user_in_group(const char *username, const char *groupname);
-void add_transaction(Transaction *new_transaction);
+int is_user_in_blockusers_group(const char *username);
+void load_blockusers_into_users();
+
+void add_user_if_not_exists(const char *username);
+void generate_keys_for_user(const char *username);
+void load_user_public_key(struct User *user);
+
 void compute_block_hash(Block *block);
 void create_genesis_block();
+void load_blockchain();
+void load_validator_public_keys(Block *block);
+
+void display_blockchain();
+void print_hash(unsigned char *hash, unsigned int hash_len);
+void print_block_signature(Block *block);
+void display_dilithium2_signature_for_block(int block_index);
+
 void add_block_to_blockchain(Block *new_block);
 void create_new_block();
-void load_blockchain();
-void display_blockchain();
-void user_login();
-void user_logout();
+void finalize_block();
+void sign_block(Block *block, const char *validator_username);
+int verify_block_signatures(Block *block);
+void sign_pending_block(const char *validator_username);
+
+void save_pending_block();
+void load_pending_block();
+
+void add_transaction(Transaction *new_transaction);
 void send_transaction();
 void view_transactions();
 void view_all_transactions();
 void view_pending_transactions();
 void cancel_pending_transaction();
+
 void update_user_balance(const char *username, double amount);
 double get_user_balance(const char *username);
 void request_test_funds();
-void test_keccak_hash();
 void log_event(const char *event_description);
+
+void user_login();
+void user_logout();
+
+// Staking
+void stake_tokens(const char *username, double amount);
+void unstake_tokens(const char *username, double amount);
+
+// Slashing
+void slash_user_stake(const char *username, double penalty);
+
+struct User* find_user(const char *username);
+
+double compute_vrf(const char *username, int round);
+void select_validators(char selected_validators[MAX_VALIDATORS_PER_BLOCK][MAX_USERNAME_LENGTH],
+                       int *validator_count);
+void check_and_create_block();
+
 void cleanup_blockchain();
 void cleanup_pending_transactions();
 void cleanup_users();
 void cleanup_and_exit(int signum);
-void print_hash(unsigned char *hash, unsigned int hash_len);
-double compute_vrf(const char *username, int round);
-void select_validators(char selected_validators[MAX_VALIDATORS_PER_BLOCK][MAX_USERNAME_LENGTH], int *validator_count);
-void check_and_create_block();
-void add_user_if_not_exists(const char *username);
-void load_blockusers_into_users();
-int is_user_in_blockusers_group(const char *username);
-int ensure_blocks_directory();
-void generate_keys_for_user(const char *username);
-void sign_block(Block *block, const char *validator_username);
-int verify_block_signatures(Block *block);
-void print_block_signature(Block *block);
-void display_dilithium2_signature_for_block(int block_index);
-void load_validator_public_keys(Block *block);
-void load_user_public_key(User *user);
-void save_pending_block();
-void load_pending_block();
-void sign_pending_block(const char *validator_username);
-void finalize_block();
 
-// ADDED: staking-related prototypes
-void stake_tokens(const char *username, double amount);
-void unstake_tokens(const char *username, double amount);
-
-// Utility to find a user in the linked list
-User *find_user(const char *username);
-
-// PAM conversation function prototype
 int pam_conversation(int num_msg, const struct pam_message **msg,
                      struct pam_response **resp, void *appdata_ptr);
 
+//================= MAIN ====================
 int main() {
     int choice;
 
-    // Ensure the blocks directory exists
     if (ensure_blocks_directory() != 0) {
-        printf("Failed to create or access the blocks directory.\n");
+        printf("Failed to create/access blocks dir.\n");
         exit(1);
     }
 
-    // Load blockchain from files
+    // Load blockusers & blockchain
     load_blockusers_into_users();
-    // Load blockusers into users list
     load_blockchain();
-    // Register signal handlers for graceful exit
+
     signal(SIGINT, cleanup_and_exit);
     signal(SIGTERM, cleanup_and_exit);
 
-    while (1) {
-        printf("\n--- Simple Login and Blockchain System (with basic PoS) ---\n");
-
-        if (strlen(current_user) > 0) {
-            // User is logged in
+    while(1) {
+        printf("\n--- Simple Login & Blockchain (with Slashing) ---\n");
+        if(strlen(current_user)>0) {
+            // Logged in
             printf("Logged in as: %s (%s)\n", current_user, current_role);
             printf("Balance: %.2f tokens\n", get_user_balance(current_user));
-
-            // Find user struct to also display stake:
             User *u = find_user(current_user);
-            if (u) {
+            if(u) {
                 printf("Staked: %.2f tokens\n", u->stake);
             }
 
@@ -186,135 +189,96 @@ int main() {
             printf("9. Cancel Pending Transaction\n");
             printf("10. Check Validator Status and Create Block\n");
             printf("11. Display Block Signature\n");
-            // ADDED menu items for staking
             printf("12. Stake Tokens\n");
             printf("13. Unstake Tokens\n");
 
-            printf("Enter your choice: ");
-            if (scanf("%d", &choice) != 1) {
-                printf("Invalid input. Please enter a number.\n");
-                while (getchar() != '\n'); // Clear input buffer
+            printf("Enter choice: ");
+            if(scanf("%d",&choice)!=1){
+                printf("Invalid input.\n");
+                while(getchar()!='\n');
                 continue;
             }
-            while (getchar() != '\n'); // Clear input buffer
+            while(getchar()!='\n');
 
-            switch (choice) {
-                case 1:
-                    user_logout();
-                    break;
-                case 2:
-                    send_transaction();
-                    break;
-                case 3:
-                    view_transactions();
-                    break;
-                case 4:
-                    view_all_transactions();
-                    break;
-                case 5:
-                    display_blockchain();
-                    break;
-                case 6:
-                    cleanup_and_exit(0);
-                    break;
-                case 7:
-                    request_test_funds();
-                    break;
-                case 8:
-                    view_pending_transactions();
-                    break;
-                case 9:
-                    cancel_pending_transaction();
-                    break;
-                case 10:
-                    check_and_create_block();
-                    break;
-                case 11:
-                {
+            switch(choice){
+                case 1: user_logout(); break;
+                case 2: send_transaction(); break;
+                case 3: view_transactions(); break;
+                case 4: view_all_transactions(); break;
+                case 5: display_blockchain(); break;
+                case 6: cleanup_and_exit(0); break;
+                case 7: request_test_funds(); break;
+                case 8: view_pending_transactions(); break;
+                case 9: cancel_pending_transaction(); break;
+                case 10: check_and_create_block(); break;
+                case 11: {
                     int block_index;
-                    printf("Enter the block index to display its signature: ");
-                    if (scanf("%d", &block_index) != 1) {
-                        printf("Invalid input.\n");
-                        while (getchar() != '\n'); // Clear input buffer
+                    printf("Enter block index: ");
+                    if(scanf("%d",&block_index)!=1){
+                        printf("Invalid.\n");
+                        while(getchar()!='\n');
                         break;
                     }
-                    while (getchar() != '\n'); // Clear input buffer
+                    while(getchar()!='\n');
                     display_dilithium2_signature_for_block(block_index);
-                    break;
-                }
-                // ADDED: Staking menu handlers
-                case 12:
-                {
-                    double amount;
+                } break;
+                case 12: {
+                    double amt;
                     printf("Enter amount to stake: ");
-                    if (scanf("%lf", &amount) != 1) {
-                        printf("Invalid input.\n");
-                        while (getchar() != '\n'); // Clear buffer
+                    if(scanf("%lf",&amt)!=1){
+                        printf("Invalid.\n");
+                        while(getchar()!='\n');
                         break;
                     }
-                    stake_tokens(current_user, amount);
-                    break;
-                }
-                case 13:
-                {
-                    double amount;
+                    stake_tokens(current_user,amt);
+                } break;
+                case 13: {
+                    double amt;
                     printf("Enter amount to unstake: ");
-                    if (scanf("%lf", &amount) != 1) {
-                        printf("Invalid input.\n");
-                        while (getchar() != '\n'); // Clear buffer
+                    if(scanf("%lf",&amt)!=1){
+                        printf("Invalid.\n");
+                        while(getchar()!='\n');
                         break;
                     }
-                    unstake_tokens(current_user, amount);
-                    break;
-                }
-                default:
-                    printf("Invalid choice. Please try again.\n");
+                    unstake_tokens(current_user,amt);
+                } break;
+                default: printf("Invalid choice.\n");
             }
         } else {
-            // User is not logged in
+            // Not logged in
             printf("1. Login\n");
             printf("2. View All Transactions\n");
             printf("3. Display Blockchain\n");
             printf("4. View Pending Transactions\n");
             printf("5. Exit\n");
-            printf("Enter your choice: ");
-            if (scanf("%d", &choice) != 1) {
-                printf("Invalid input. Please enter a number.\n");
-                while (getchar() != '\n'); // Clear input buffer
+
+            printf("Enter choice: ");
+            if(scanf("%d",&choice)!=1){
+                printf("Invalid.\n");
+                while(getchar()!='\n');
                 continue;
             }
-            while (getchar() != '\n'); // Clear input buffer
+            while(getchar()!='\n');
 
-            switch (choice) {
-                case 1:
-                    user_login();
-                    break;
-                case 2:
-                    view_all_transactions();
-                    break;
-                case 3:
-                    display_blockchain();
-                    break;
-                case 4:
-                    view_pending_transactions();
-                    break;
-                case 5:
-                    cleanup_and_exit(0);
-                    break;
-                default:
-                    printf("Invalid choice. Please try again.\n");
+            switch(choice){
+                case 1: user_login(); break;
+                case 2: view_all_transactions(); break;
+                case 3: display_blockchain(); break;
+                case 4: view_pending_transactions(); break;
+                case 5: cleanup_and_exit(0); break;
+                default: printf("Invalid choice.\n");
             }
         }
     }
-
     return 0;
 }
 
-// Function to ensure the blocks directory exists
-int ensure_blocks_directory() {
-    struct stat st = {0};
-    if (stat(BLOCKS_DIR, &st) == -1) {
-        if (mkdir(BLOCKS_DIR, 0700) != 0) {
+//================= BLOCKUSERS + GROUPS ===================
+
+int ensure_blocks_directory(){
+    struct stat st;
+    if(stat(BLOCKS_DIR,&st)==-1){
+        if(mkdir(BLOCKS_DIR,0700)!=0){
             perror("mkdir");
             return -1;
         }
@@ -322,673 +286,761 @@ int ensure_blocks_directory() {
     return 0;
 }
 
-// Function to test SHA3-512 hash with a known input
-void test_keccak_hash() {
-    const char *test_input = "abc";
-    unsigned char hash_output[64]; // SHA3-512 hash size is 64 bytes
+int is_user_in_group(const char *username, const char *groupname){
+    struct group*grp = getgrnam(groupname);
+    if(!grp) return 0;
 
-    printf("test_keccak_hash: Testing SHA3-512 hash function via OpenSSL...\n");
-
-    EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
-    if (mdctx == NULL) {
-        printf("Failed to create EVP_MD_CTX.\n");
-        exit(1);
-    }
-    if (EVP_DigestInit_ex(mdctx, EVP_sha3_512(), NULL) != 1) {
-        printf("Failed to initialize digest context.\n");
-        exit(1);
-    }
-    if (EVP_DigestUpdate(mdctx, test_input, strlen(test_input)) != 1) {
-        printf("Failed to update digest.\n");
-        exit(1);
-    }
-    if (EVP_DigestFinal_ex(mdctx, hash_output, NULL) != 1) {
-        printf("Failed to finalize digest.\n");
-        exit(1);
-    }
-    EVP_MD_CTX_free(mdctx);
-
-    printf("SHA3-512 hash of \"%s\":\n", test_input);
-    for (unsigned int i = 0; i < 64; i++) {
-        printf("%02X", hash_output[i]);
-    }
-    printf("\n");
-}
-
-// Function to check if a user is in a specific group
-int is_user_in_group(const char *username, const char *groupname) {
-    struct group *grp = getgrnam(groupname);
-    if (!grp) {
-        return 0;
-    }
-
-    // Check if the user's primary group matches
     struct passwd *pwd = getpwnam(username);
-    if (pwd && pwd->pw_gid == grp->gr_gid) {
+    if(pwd && pwd->pw_gid==grp->gr_gid){
         return 1;
     }
-
-    // Check if the user is in the group's member list
-    char **members = grp->gr_mem;
-    while (*members) {
-        if (strcmp(*members, username) == 0) {
+    char **members=grp->gr_mem;
+    while(*members){
+        if(strcmp(*members,username)==0){
             return 1;
         }
         members++;
     }
-
     return 0;
 }
 
-// Function to check if a user is in blockusers group
-int is_user_in_blockusers_group(const char *username) {
-    return is_user_in_group(username, "blockusers");
+int is_user_in_blockusers_group(const char *username){
+    return is_user_in_group(username,"blockusers");
 }
 
-// Function to compute the SHA3-512 hash of a block using OpenSSL
-void compute_block_hash(Block *block) {
-    printf("compute_block_hash: Computing hash for block index %d using SHA3-512 via OpenSSL...\n", block->index);
-
-    unsigned char hash_input[8192]; // Adjust size as needed
-    size_t offset = 0;
-
-    // Hash block index
-    memcpy(hash_input + offset, &block->index, sizeof(block->index));
-    offset += sizeof(block->index);
-
-    // Hash block timestamp
-    memcpy(hash_input + offset, &block->timestamp, sizeof(block->timestamp));
-    offset += sizeof(block->timestamp);
-
-    // Hash transactions
-    for (int i = 0; i < block->transaction_count; i++) {
-        Transaction *tx = &block->transactions[i];
-
-        memcpy(hash_input + offset, &tx->id, sizeof(tx->id));
-        offset += sizeof(tx->id);
-
-        memcpy(hash_input + offset, &tx->type, sizeof(tx->type));
-        offset += sizeof(tx->type);
-
-        size_t sender_len = strlen(tx->sender) + 1;
-        memcpy(hash_input + offset, tx->sender, sender_len);
-        offset += sender_len;
-
-        size_t recipient_len = strlen(tx->recipient) + 1;
-        memcpy(hash_input + offset, tx->recipient, recipient_len);
-        offset += recipient_len;
-
-        memcpy(hash_input + offset, &tx->amount, sizeof(tx->amount));
-        offset += sizeof(tx->amount);
-
-        memcpy(hash_input + offset, &tx->timestamp, sizeof(tx->timestamp));
-        offset += sizeof(tx->timestamp);
+void load_blockusers_into_users(){
+    printf("load_blockusers_into_users: scanning system...\n");
+    struct passwd *pwd;
+    setpwent();
+    while((pwd=getpwent())!=NULL){
+        if(is_user_in_blockusers_group(pwd->pw_name)){
+            add_user_if_not_exists(pwd->pw_name);
+        }
     }
-
-    // Hash previous block's hash
-    memcpy(hash_input + offset, block->previous_hash, block->hash_len);
-    offset += block->hash_len;
-
-    // Hash validators' usernames
-    for (int i = 0; i < block->validator_count; i++) {
-        size_t validator_len = strlen(block->validators[i]) + 1;
-        memcpy(hash_input + offset, block->validators[i], validator_len);
-        offset += validator_len;
-    }
-
-    // Compute the hash using OpenSSL's SHA3-512
-    EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
-    if (mdctx == NULL) {
-        printf("Failed to create EVP_MD_CTX.\n");
-        exit(1);
-    }
-    if (EVP_DigestInit_ex(mdctx, EVP_sha3_512(), NULL) != 1) {
-        printf("Failed to initialize digest context.\n");
-        exit(1);
-    }
-    if (EVP_DigestUpdate(mdctx, hash_input, offset) != 1) {
-        printf("Failed to update digest.\n");
-        exit(1);
-    }
-    unsigned int hash_len;
-    if (EVP_DigestFinal_ex(mdctx, block->hash, &hash_len) != 1) {
-        printf("Failed to finalize digest.\n");
-        exit(1);
-    }
-    EVP_MD_CTX_free(mdctx);
-    block->hash_len = hash_len;
+    endpwent();
 }
 
-// Function to print the hash in hexadecimal format
-void print_hash(unsigned char *hash, unsigned int hash_len) {
-    for (unsigned int i = 0; i < hash_len; i++) {
-        printf("%02x", hash[i]);
+//================= USER MANAGEMENT ===================
+
+void add_user_if_not_exists(const char *username){
+    User*u=users;
+    while(u){
+        if(strcmp(u->username,username)==0){
+            return;
+        }
+        u=u->next;
+    }
+    User*newu=(User*)malloc(sizeof(User));
+    strncpy(newu->username,username,MAX_USERNAME_LENGTH-1);
+    newu->username[MAX_USERNAME_LENGTH-1]='\0';
+    newu->balance=0.0;
+    newu->stake=0.0;
+    newu->public_key_len=0;
+    newu->next=users;
+    users=newu;
+
+    load_user_public_key(newu);
+}
+
+void generate_keys_for_user(const char *username){
+    struct passwd *pwd=getpwnam(username);
+    if(!pwd){
+        printf("No home dir for '%s'.\n", username);
+        exit(1);
+    }
+
+    char keys_dir[512];
+    snprintf(keys_dir,sizeof(keys_dir),"%s/.blockchain_keys",pwd->pw_dir);
+    struct stat st;
+    if(stat(keys_dir,&st)==-1){
+        if(mkdir(keys_dir,0700)!=0){
+            printf("Failed to create keys_dir '%s'.\n", keys_dir);
+            exit(1);
+        }
+    }
+
+    char privkey[256], pubkey[256];
+    snprintf(privkey,sizeof(privkey),"%s/%s_private.key", keys_dir, username);
+    snprintf(pubkey,sizeof(pubkey),"%s/%s_public.key", keys_dir, username);
+
+    if(access(privkey,F_OK)!=-1 && access(pubkey,F_OK)!=-1){
+        printf("Keys already exist for '%s'.\n", username);
+        return;
+    }
+
+    OQS_SIG* sig=OQS_SIG_new("Dilithium2");
+    if(!sig){
+        printf("Dilithium2 init fail.\n");
+        exit(1);
+    }
+    unsigned char *pub=malloc(sig->length_public_key);
+    unsigned char *priv=malloc(sig->length_secret_key);
+    if(OQS_SIG_keypair(sig,pub,priv)!=OQS_SUCCESS){
+        printf("Failed keypair for '%s'.\n", username);
+        exit(1);
+    }
+    FILE*fp=fopen(privkey,"wb");
+    if(!fp){
+        printf("Failed open '%s'.\n", privkey);
+        exit(1);
+    }
+    fwrite(priv,1,sig->length_secret_key,fp);
+    fclose(fp);
+    chmod(privkey,0600);
+
+    fp=fopen(pubkey,"wb");
+    if(!fp){
+        printf("Failed open '%s'.\n", pubkey);
+        exit(1);
+    }
+    fwrite(pub,1,sig->length_public_key,fp);
+    fclose(fp);
+    chmod(pubkey,0644);
+
+    OQS_SIG_free(sig);
+    free(pub);
+    free(priv);
+    printf("Generated Dilithium2 keys for '%s'.\n", username);
+}
+
+void load_user_public_key(User *user){
+    struct passwd*pwd=getpwnam(user->username);
+    if(!pwd){
+        user->public_key_len=0;
+        return;
+    }
+    char pkey[256];
+    snprintf(pkey,sizeof(pkey),"%s/.blockchain_keys/%s_public.key",
+             pwd->pw_dir, user->username);
+
+    if(access(pkey,F_OK)!=-1){
+        FILE*fp=fopen(pkey,"rb");
+        if(!fp){
+            user->public_key_len=0;
+            return;
+        }
+        fseek(fp,0,SEEK_END);
+        user->public_key_len=ftell(fp);
+        fseek(fp,0,SEEK_SET);
+        fread(user->public_key,1,user->public_key_len,fp);
+        fclose(fp);
+        printf("Loaded public key for '%s'.\n", user->username);
+    } else {
+        memset(user->public_key,0,sizeof(user->public_key));
+        user->public_key_len=0;
+        printf("No public key for '%s'.\n", user->username);
     }
 }
 
-// Function to create the genesis block (first block in the blockchain)
-void create_genesis_block() {
-    printf("create_genesis_block: Creating genesis block...\n");
-
-    Block *genesis = (Block *)malloc(sizeof(Block));
-    if (!genesis) {
-        printf("Failed to create genesis block. Memory allocation error.\n");
-        exit(1);
+User* find_user(const char*username){
+    User*u=users;
+    while(u){
+        if(strcmp(u->username,username)==0){
+            return u;
+        }
+        u=u->next;
     }
-    genesis->index = 0;                              // Genesis block index is 0
-    genesis->timestamp = time(NULL);                 // Current timestamp
-    genesis->transaction_count = 0;                  // No transactions in genesis block
-    memset(genesis->previous_hash, 0, sizeof(genesis->previous_hash)); // Previous hash is zero (no previous block)
-    genesis->hash_len = 0;                           // Initial hash length is zero
+    return NULL;
+}
 
-    // Initialize validators
-    genesis->validator_count = 0;
-    memset(genesis->validators, 0, sizeof(genesis->validators));
-    memset(genesis->signatures, 0, sizeof(genesis->signatures));
-    memset(genesis->signature_lens, 0, sizeof(genesis->signature_lens));
+//================= BLOCK & TRANSACTION ===================
 
-    compute_block_hash(genesis);                     // Compute hash of the genesis block
-    genesis->next = NULL;                            // No next block yet
-    blockchain = genesis;                            // Set genesis block as the head of the blockchain
+void compute_block_hash(Block *block){
+    unsigned char input[8192];
+    size_t off=0;
 
-    printf("create_genesis_block: Genesis block created with hash: ");
-    print_hash(genesis->hash, genesis->hash_len);
-    printf("\n");
+    memcpy(input+off,&block->index,sizeof(block->index));
+    off+=sizeof(block->index);
 
-    // Save the genesis block to a file
-    char filename[256];
-    snprintf(filename, sizeof(filename), "%s/block_%d.dat", BLOCKS_DIR, genesis->index);
-    FILE *file = fopen(filename, "wb");
-    if (!file) {
+    memcpy(input+off,&block->timestamp,sizeof(block->timestamp));
+    off+=sizeof(block->timestamp);
+
+    for(int i=0;i<block->transaction_count;i++){
+        Transaction *tx=&block->transactions[i];
+        memcpy(input+off,&tx->id,sizeof(tx->id)); off+=sizeof(tx->id);
+        memcpy(input+off,&tx->type,sizeof(tx->type)); off+=sizeof(tx->type);
+
+        size_t s_len=strlen(tx->sender)+1;
+        memcpy(input+off,tx->sender,s_len);
+        off+=s_len;
+
+        size_t r_len=strlen(tx->recipient)+1;
+        memcpy(input+off,tx->recipient,r_len);
+        off+=r_len;
+
+        memcpy(input+off,&tx->amount,sizeof(tx->amount)); off+=sizeof(tx->amount);
+        memcpy(input+off,&tx->timestamp,sizeof(tx->timestamp)); off+=sizeof(tx->timestamp);
+    }
+
+    memcpy(input+off,block->previous_hash,block->hash_len);
+    off+=block->hash_len;
+
+    for(int i=0;i<block->validator_count;i++){
+        size_t val_len=strlen(block->validators[i])+1;
+        memcpy(input+off,block->validators[i],val_len);
+        off+=val_len;
+    }
+
+    EVP_MD_CTX*md=EVP_MD_CTX_new();
+    EVP_DigestInit_ex(md,EVP_sha3_512(),NULL);
+    EVP_DigestUpdate(md,input,off);
+    unsigned int hl;
+    EVP_DigestFinal_ex(md,block->hash,&hl);
+    EVP_MD_CTX_free(md);
+    block->hash_len=hl;
+}
+
+void create_genesis_block(){
+    Block*g=malloc(sizeof(Block));
+    g->index=0;
+    g->timestamp=time(NULL);
+    g->transaction_count=0;
+    memset(g->previous_hash,0,sizeof(g->previous_hash));
+    g->hash_len=0;
+
+    g->validator_count=0;
+    memset(g->validators,0,sizeof(g->validators));
+    memset(g->signatures,0,sizeof(g->signatures));
+    memset(g->signature_lens,0,sizeof(g->signature_lens));
+
+    compute_block_hash(g);
+    g->next=NULL;
+    blockchain=g;
+
+    char fn[256];
+    snprintf(fn,sizeof(fn),"%s/block_0.dat", BLOCKS_DIR);
+    FILE*fp=fopen(fn,"wb");
+    if(!fp){
         printf("Unable to create genesis block file.\n");
         return;
     }
-    fwrite(genesis, sizeof(Block), 1, file);
-    fclose(file);
+    fwrite(g,sizeof(Block),1,fp);
+    fclose(fp);
+    printf("Genesis block created.\n");
 }
 
-// Function to add a block to the blockchain
-void add_block_to_blockchain(Block *new_block) {
-    printf("add_block_to_blockchain: Adding block index %d to blockchain.\n", new_block->index);
-
-    // Append the new block to the blockchain
-    Block *current = blockchain;
-    while (current->next != NULL)
-        current = current->next;
-    current->next = new_block;
-
-    // Update user balances
-    for (int i = 0; i < new_block->transaction_count; i++) {
-        Transaction *tx = &new_block->transactions[i];
-        if (strlen(tx->sender) > 0) {
-            update_user_balance(tx->sender, -tx->amount);
-        }
-        update_user_balance(tx->recipient, tx->amount);
-    }
-
-    // Save the new block to a file
-    char filename[256];
-    snprintf(filename, sizeof(filename), "%s/block_%d.dat", BLOCKS_DIR, new_block->index);
-    FILE *file = fopen(filename, "wb");
-    if (!file) {
-        printf("Unable to create block file for block index %d.\n", new_block->index);
-        return;
-    }
-    fwrite(new_block, sizeof(Block), 1, file);
-    fclose(file);
-}
-
-// Function to create a new block from pending transactions
-void create_new_block() {
-    if (pending_transactions == NULL)
-        return;
-
-    if (pending_block != NULL) {
-        printf("A pending block already exists. Waiting for validators to sign.\n");
-        return;
-    }
-
-    printf("create_new_block: Creating a new pending block...\n");
-
-    // Select the validators
-    char selected_validators[MAX_VALIDATORS_PER_BLOCK][MAX_USERNAME_LENGTH];
-    int validator_count = 0;
-    select_validators(selected_validators, &validator_count);
-
-    // Check if the current user is among the selected validators
-    int is_current_user_validator = 0;
-    for (int i = 0; i < validator_count; i++) {
-        if (strcmp(current_user, selected_validators[i]) == 0) {
-            is_current_user_validator = 1;
-            break;
-        }
-    }
-
-    if (!is_current_user_validator) {
-        printf("Current user '%s' is not among the selected validators. Block creation deferred.\n", current_user);
-        return;
-    }
-
-    Block *new_block = (Block *)malloc(sizeof(Block));
-    if (!new_block) {
-        printf("Failed to create new block. Memory allocation error.\n");
-        return;
-    }
-
-    // Set block index based on the last block in the blockchain
-    Block *last_block = blockchain;
-    while (last_block->next != NULL)
-        last_block = last_block->next;
-    new_block->index = last_block->index + 1;
-
-    new_block->timestamp = time(NULL); // Set current timestamp
-    new_block->transaction_count = 0;
-
-    // Copy up to MAX_TRANSACTIONS_PER_BLOCK from pending transactions
-    Transaction *current_tx = pending_transactions;
-    for (int i = 0; i < MAX_TRANSACTIONS_PER_BLOCK && current_tx != NULL; i++) {
-        new_block->transactions[i] = *current_tx;
-        new_block->transaction_count++;
-        current_tx = current_tx->next;
-    }
-
-    // Set previous hash from the last block
-    memcpy(new_block->previous_hash, last_block->hash, last_block->hash_len);
-    new_block->hash_len = last_block->hash_len;
-
-    // Set validators
-    new_block->validator_count = validator_count;
-    for (int i = 0; i < validator_count; i++) {
-        strncpy(new_block->validators[i], selected_validators[i], MAX_USERNAME_LENGTH - 1);
-        new_block->validators[i][MAX_USERNAME_LENGTH - 1] = '\0';
-        new_block->signature_lens[i] = 0; // Initialize signature lengths
-    }
-
-    new_block->next = NULL;
-
-    // Compute the block hash without signatures
-    compute_block_hash(new_block);
-
-    // Set the pending block
-    pending_block = new_block;
-
-    // Save the pending block to a file
-    save_pending_block();
-
-    // Sign the pending block
-    sign_pending_block(current_user);
-}
-
-// Function to save the pending block to a file
-void save_pending_block() {
-    if (pending_block == NULL)
-        return;
-
-    FILE *file = fopen("pending_block.dat", "wb");
-    if (!file) {
-        printf("Unable to save pending block.\n");
-        return;
-    }
-    fwrite(pending_block, sizeof(Block), 1, file);
-    fclose(file);
-}
-
-// Function to load the pending block from a file
-void load_pending_block() {
-    FILE *file = fopen("pending_block.dat", "rb");
-    if (!file) {
-        // No pending block saved
-        pending_block = NULL;
-        return;
-    }
-
-    if (pending_block == NULL) {
-        pending_block = (Block *)malloc(sizeof(Block));
-        if (!pending_block) {
-            printf("Failed to load pending block. Memory allocation error.\n");
-            fclose(file);
-            return;
-        }
-    }
-
-    size_t read = fread(pending_block, sizeof(Block), 1, file);
-    fclose(file);
-    if (read == 0) {
-        free(pending_block);
-        pending_block = NULL;
-        printf("Failed to read pending block from file.\n");
-        return;
-    }
-}
-
-// Function to sign the pending block
-void sign_pending_block(const char *validator_username) {
-    if (pending_block == NULL) {
-        printf("No pending block to sign.\n");
-        return;
-    }
-
-    // Check if validator has already signed
-    int validator_index = -1;
-    for (int i = 0; i < pending_block->validator_count; i++) {
-        if (strcmp(pending_block->validators[i], validator_username) == 0) {
-            validator_index = i;
-            break;
-        }
-    }
-
-    if (validator_index == -1) {
-        printf("User '%s' is not a validator for the pending block.\n", validator_username);
-        return;
-    }
-
-    if (pending_block->signature_lens[validator_index] > 0) {
-        printf("User '%s' has already signed the pending block.\n", validator_username);
-        return;
-    }
-
-    // Sign the block
-    sign_block(pending_block, validator_username);
-
-    // Save the pending block after signing
-    save_pending_block();
-
-    printf("User '%s' has signed the pending block.\n", validator_username);
-
-    // Check if all validators have signed
-    int all_signed = 1;
-    for (int i = 0; i < pending_block->validator_count; i++) {
-        if (pending_block->signature_lens[i] == 0) {
-            all_signed = 0;
-            break;
-        }
-    }
-
-    if (all_signed) {
-        printf("All validators have signed the pending block. Finalizing block.\n");
-        finalize_block();
-    } else {
-        printf("Waiting for other validators to sign the block.\n");
-    }
-}
-
-// Function to finalize the pending block
-void finalize_block() {
-    // Remove the pending transactions that were included in the block
-    for (int i = 0; i < pending_block->transaction_count; i++) {
-        Transaction *temp = pending_transactions;
-        pending_transactions = pending_transactions->next;
-        free(temp);
-    }
-
-    // Add the block to the blockchain
-    add_block_to_blockchain(pending_block);
-
-    // ADD REWARD DISTRIBUTION
-    // Here, we give a fixed reward to each validator of the block
-    double block_reward = 10.0; // Example fixed reward
-    double share = block_reward / pending_block->validator_count;
-    for (int i = 0; i < pending_block->validator_count; i++) {
-        update_user_balance(pending_block->validators[i], share);
-        printf("Validator '%s' receives %.2f tokens for block %d.\n",
-               pending_block->validators[i], share, pending_block->index);
-    }
-
-    // Remove the pending block file
-    remove("pending_block.dat");
-
-    printf("Block finalized and added to the blockchain.\n");
-
-    // Clear the pending block
-    pending_block = NULL;
-}
-
-// Function to load the blockchain from files
-void load_blockchain() {
-    printf("load_blockchain: Loading blockchain from files...\n");
-
-    DIR *dir = opendir(BLOCKS_DIR);
-    if (!dir) {
-        printf("Blocks directory not found. Creating genesis block.\n");
+void load_blockchain(){
+    DIR*dir=opendir(BLOCKS_DIR);
+    if(!dir){
+        printf("No blocks dir. Creating genesis.\n");
         create_genesis_block();
         return;
     }
 
     struct dirent *entry;
-    int block_indices[1000]; // Adjust size as needed
-    int block_count = 0;
-
-    // Collect block indices from filenames
-    while ((entry = readdir(dir)) != NULL) {
-        if (strncmp(entry->d_name, "block_", 6) == 0) {
-            int index = atoi(entry->d_name + 6);
-            block_indices[block_count++] = index;
+    int block_idxs[1000];
+    int bc=0;
+    while((entry=readdir(dir))!=NULL){
+        if(strncmp(entry->d_name,"block_",6)==0){
+            int idx=atoi(entry->d_name+6);
+            block_idxs[bc++]=idx;
         }
     }
     closedir(dir);
-
-    if (block_count == 0) {
-        printf("No blocks found in the directory. Creating genesis block.\n");
+    if(bc==0){
+        printf("No block files. Creating genesis.\n");
         create_genesis_block();
         return;
     }
-
-    // Sort the block indices
-    for (int i = 0; i < block_count - 1; i++) {
-        for (int j = i + 1; j < block_count; j++) {
-            if (block_indices[i] > block_indices[j]) {
-                int temp = block_indices[i];
-                block_indices[i] = block_indices[j];
-                block_indices[j] = temp;
+    // sort
+    for(int i=0;i<bc-1;i++){
+        for(int j=i+1;j<bc;j++){
+            if(block_idxs[i]>block_idxs[j]){
+                int t=block_idxs[i];
+                block_idxs[i]=block_idxs[j];
+                block_idxs[j]=t;
             }
         }
     }
 
-    Block *prev_block = NULL;
-    for (int i = 0; i < block_count; i++) {
-        char filename[256];
-        snprintf(filename, sizeof(filename), "%s/block_%d.dat", BLOCKS_DIR, block_indices[i]);
-        FILE *file = fopen(filename, "rb");
-        if (!file) {
-            printf("Failed to open block file: %s\n", filename);
+    Block*prev=NULL;
+    for(int i=0;i<bc;i++){
+        char fn[256];
+        snprintf(fn,sizeof(fn),"%s/block_%d.dat", BLOCKS_DIR, block_idxs[i]);
+        FILE*fp=fopen(fn,"rb");
+        if(!fp){
+            printf("Failed open block file '%s'.\n", fn);
             exit(1);
         }
-
-        Block *block = (Block *)malloc(sizeof(Block));
-        if (!block) {
-            printf("Failed to load block. Memory allocation error.\n");
-            fclose(file);
+        Block*blk=malloc(sizeof(Block));
+        if(!blk){
+            printf("OOM block.\n");
+            fclose(fp);
             exit(1);
         }
-        size_t read = fread(block, sizeof(Block), 1, file);
-        fclose(file);
-        if (read == 0) {
-            free(block);
-            printf("Failed to read block from file: %s\n", filename);
+        size_t r=fread(blk,sizeof(Block),1,fp);
+        fclose(fp);
+        if(r==0){
+            free(blk);
+            printf("Fail read block '%s'.\n", fn);
             exit(1);
         }
-        block->next = NULL;
-        if (prev_block == NULL) {
-            blockchain = block; // Set as first block
+        blk->next=NULL;
+        if(!prev){
+            blockchain=blk;
         } else {
-            prev_block->next = block; // Append to blockchain
+            prev->next=blk;
         }
-        prev_block = block;
+        prev=blk;
 
-        // Load public keys for validators
-        load_validator_public_keys(block);
-
-        // Verify block signatures
-        if (block->index != 0) { // Skip genesis block
-            if (!verify_block_signatures(block)) {
-                printf("Invalid signatures for block index %d. Exiting.\n", block->index);
+        load_validator_public_keys(blk);
+        if(blk->index!=0){
+            if(!verify_block_signatures(blk)){
+                printf("Invalid signature for block %d.\n", blk->index);
                 exit(1);
             }
         }
-
-        // Update user balances
-        for (int j = 0; j < block->transaction_count; j++) {
-            Transaction *tx = &block->transactions[j];
-            if (strlen(tx->sender) > 0) {
-                update_user_balance(tx->sender, -tx->amount);
+        // update balances
+        for(int t=0;t<blk->transaction_count;t++){
+            Transaction*tx=&blk->transactions[t];
+            if(strlen(tx->sender)>0){
+                update_user_balance(tx->sender,-tx->amount);
             }
-            update_user_balance(tx->recipient, tx->amount);
+            update_user_balance(tx->recipient,tx->amount);
         }
     }
-
-    printf("load_blockchain: Blockchain loaded successfully.\n");
+    printf("Blockchain loaded.\n");
 }
 
-// Function to load public keys for validators in a block
-void load_validator_public_keys(Block *block) {
-    for (int i = 0; i < block->validator_count; i++) {
-        const char *validator_username = block->validators[i];
-
-        // Check if user already exists in the users list
-        User *validator_user = users;
-        while (validator_user != NULL) {
-            if (strcmp(validator_user->username, validator_username) == 0) {
-                break;
-            }
-            validator_user = validator_user->next;
+void load_validator_public_keys(Block *block){
+    for(int i=0;i<block->validator_count;i++){
+        const char *val = block->validators[i];
+        User*u=users;
+        while(u){
+            if(strcmp(u->username,val)==0) break;
+            u=u->next;
         }
-
-        // If user not found, add user and load public key
-        if (validator_user == NULL) {
-            add_user_if_not_exists(validator_username);
+        if(!u){
+            add_user_if_not_exists(val);
         } else {
-            // Ensure public key is loaded
-            if (validator_user->public_key_len == 0) {
-                load_user_public_key(validator_user);
+            if(u->public_key_len==0){
+                load_user_public_key(u);
             }
         }
     }
 }
 
-// Function to load a user's public key
-void load_user_public_key(User *user) {
-    // Get the user's home directory
-    struct passwd *pwd = getpwnam(user->username);
-    if (pwd == NULL) {
-        printf("Failed to get home directory for user '%s'.\n", user->username);
-        user->public_key_len = 0;
+void display_blockchain(){
+    printf("display_blockchain:\n");
+    Block*b=blockchain;
+    while(b){
+        printf("\nBlock Index: %d\n", b->index);
+        printf("Timestamp: %s", ctime(&b->timestamp));
+        printf("Validators: ");
+        for(int i=0;i<b->validator_count;i++){
+            printf("%s ", b->validators[i]);
+        }
+        printf("\nPrev Hash: ");
+        print_hash(b->previous_hash,b->hash_len);
+        printf("\nHash: ");
+        print_hash(b->hash,b->hash_len);
+        printf("\nTransactions:\n");
+        for(int i=0;i<b->transaction_count;i++){
+            Transaction*tx=&b->transactions[i];
+            char ts[26]; ctime_r(&tx->timestamp,ts);
+            ts[strlen(ts)-1]='\0';
+
+            if(strlen(tx->sender)==0){
+                printf("  [%s] ID:%d Sys->%s Amt:%.2f\n",
+                       ts,tx->id,tx->recipient,tx->amount);
+            } else {
+                printf("  [%s] ID:%d From:%s To:%s Amt:%.2f\n",
+                       ts,tx->id,tx->sender,tx->recipient,tx->amount);
+            }
+        }
+        printf("Signatures:\n");
+        for(int i=0;i<b->validator_count;i++){
+            printf("Validator '%s' Signature:\n", b->validators[i]);
+            if(b->signature_lens[i]==0){
+                printf("  None.\n");
+                continue;
+            }
+            for(size_t j=0;j<b->signature_lens[i];j++){
+                printf("%02x",b->signatures[i][j]);
+                if((j+1)%32==0) printf("\n");
+            }
+            if(b->signature_lens[i]%32!=0) printf("\n");
+        }
+        b=b->next;
+    }
+}
+
+void print_hash(unsigned char*hash, unsigned int hash_len){
+    for(unsigned int i=0;i<hash_len;i++){
+        printf("%02x",hash[i]);
+    }
+}
+
+void print_block_signature(Block *block){
+    printf("Block %d Signatures:\n", block->index);
+    for(int i=0;i<block->validator_count;i++){
+        printf("Validator '%s' Signature:\n", block->validators[i]);
+        if(block->signature_lens[i]==0){
+            printf("No signature.\n");
+            continue;
+        }
+        for(size_t j=0;j<block->signature_lens[i];j++){
+            printf("%02x", block->signatures[i][j]);
+            if((j+1)%32==0) printf("\n");
+        }
+        if(block->signature_lens[i]%32!=0) printf("\n");
+    }
+    printf("Block %d Hash:\n", block->index);
+    for(unsigned int i=0;i<block->hash_len;i++){
+        printf("%02x", block->hash[i]);
+    }
+    printf("\n");
+
+    if(verify_block_signatures(block)){
+        printf("All signatures valid.\n");
+    } else {
+        printf("Some sig invalid.\n");
+    }
+}
+
+void display_dilithium2_signature_for_block(int block_index){
+    Block*b=blockchain;
+    while(b){
+        if(b->index==block_index){
+            print_block_signature(b);
+            return;
+        }
+        b=b->next;
+    }
+    printf("Block %d not found.\n", block_index);
+}
+
+void add_block_to_blockchain(Block* new_block){
+    Block*b=blockchain;
+    while(b->next) b=b->next;
+    b->next=new_block;
+    for(int i=0;i<new_block->transaction_count;i++){
+        Transaction*tx=&new_block->transactions[i];
+        if(strlen(tx->sender)>0){
+            update_user_balance(tx->sender,-tx->amount);
+        }
+        update_user_balance(tx->recipient,tx->amount);
+    }
+    char fn[256];
+    snprintf(fn,sizeof(fn),"%s/block_%d.dat",BLOCKS_DIR,new_block->index);
+    FILE*fp=fopen(fn,"wb");
+    if(!fp){
+        printf("Unable to create block file idx=%d.\n", new_block->index);
+        return;
+    }
+    fwrite(new_block,sizeof(Block),1,fp);
+    fclose(fp);
+}
+
+void create_new_block(){
+    if(!pending_transactions)return;
+    if(pending_block){
+        printf("A pending block already exists.\n");
+        return;
+    }
+    printf("create_new_block...\n");
+
+    char selected_validators[MAX_VALIDATORS_PER_BLOCK][MAX_USERNAME_LENGTH];
+    int validator_count=0;
+    select_validators(selected_validators,&validator_count);
+
+    int is_user_val=0;
+    for(int i=0;i<validator_count;i++){
+        if(strcmp(current_user,selected_validators[i])==0){
+            is_user_val=1;
+            break;
+        }
+    }
+    if(!is_user_val){
+        printf("User '%s' not among selected. Deferring.\n", current_user);
         return;
     }
 
-    char public_key_filename[256];
-    snprintf(public_key_filename, sizeof(public_key_filename),
-             "%s/.blockchain_keys/%s_public.key", pwd->pw_dir, user->username);
+    Block*new_block=malloc(sizeof(Block));
+    if(!new_block){
+        printf("OOM block.\n");
+        return;
+    }
 
-    if (access(public_key_filename, F_OK) != -1) {
-        // File exists, load the public key
-        FILE *fp = fopen(public_key_filename, "rb");
-        if (!fp) {
-            printf("Failed to open public key file for user '%s'.\n", user->username);
-            user->public_key_len = 0;
+    Block*last=blockchain;
+    while(last->next) last=last->next;
+    new_block->index=last->index+1;
+    new_block->timestamp=time(NULL);
+    new_block->transaction_count=0;
+
+    Transaction*ptx=pending_transactions;
+    for(int i=0;i<MAX_TRANSACTIONS_PER_BLOCK && ptx;i++){
+        new_block->transactions[i]=*ptx;
+        new_block->transaction_count++;
+        ptx=ptx->next;
+    }
+
+    memcpy(new_block->previous_hash,last->hash,last->hash_len);
+    new_block->hash_len=last->hash_len;
+
+    new_block->validator_count=validator_count;
+    for(int i=0;i<validator_count;i++){
+        strncpy(new_block->validators[i],selected_validators[i],MAX_USERNAME_LENGTH-1);
+        new_block->validators[i][MAX_USERNAME_LENGTH-1]='\0';
+        new_block->signature_lens[i]=0;
+    }
+    new_block->next=NULL;
+
+    compute_block_hash(new_block);
+    pending_block=new_block;
+
+    save_pending_block();
+    sign_pending_block(current_user);
+}
+
+void finalize_block(){
+    for(int i=0;i<pending_block->transaction_count;i++){
+        Transaction*tmp=pending_transactions;
+        pending_transactions=pending_transactions->next;
+        free(tmp);
+    }
+
+    add_block_to_blockchain(pending_block);
+
+    double block_reward=10.0;
+    double share=block_reward/pending_block->validator_count;
+    for(int i=0;i<pending_block->validator_count;i++){
+        update_user_balance(pending_block->validators[i], share);
+        printf("Validator '%s' receives %.2f tokens for block %d.\n",
+               pending_block->validators[i], share, pending_block->index);
+    }
+    remove("pending_block.dat");
+    printf("Block finalized.\n");
+    pending_block=NULL;
+}
+
+void sign_block(Block *block, const char *validator_username){
+    int vidx=-1;
+    for(int i=0;i<block->validator_count;i++){
+        if(strcmp(block->validators[i],validator_username)==0){
+            vidx=i;break;
+        }
+    }
+    if(vidx==-1){
+        printf("User '%s' not a validator.\n", validator_username);
+        return;
+    }
+
+    struct passwd*pwd=getpwnam(validator_username);
+    if(!pwd){
+        printf("getpwnam('%s') fail.\n", validator_username);
+        exit(1);
+    }
+
+    char privkey[256];
+    snprintf(privkey,sizeof(privkey),"%s/.blockchain_keys/%s_private.key",
+             pwd->pw_dir, validator_username);
+
+    FILE*fp=fopen(privkey,"rb");
+    if(!fp){
+        printf("Failed open priv key for '%s'.\n", validator_username);
+        exit(1);
+    }
+
+    OQS_SIG*sig=OQS_SIG_new("Dilithium2");
+    if(!sig){
+        printf("Dilithium2 init fail.\n");
+        exit(1);
+    }
+
+    unsigned char *private_key=malloc(sig->length_secret_key);
+    if(fread(private_key,1,sig->length_secret_key,fp)!=sig->length_secret_key){
+        printf("Fail read private key.\n");
+        fclose(fp);
+        free(private_key);
+        OQS_SIG_free(sig);
+        exit(1);
+    }
+    fclose(fp);
+
+    unsigned char block_data[8192];
+    size_t off=0;
+    memcpy(block_data+off,&block->index,sizeof(block->index)); off+=sizeof(block->index);
+    memcpy(block_data+off,&block->timestamp,sizeof(block->timestamp)); off+=sizeof(block->timestamp);
+    memcpy(block_data+off,block->transactions,sizeof(Transaction)*block->transaction_count);
+    off+=sizeof(Transaction)*block->transaction_count;
+    memcpy(block_data+off,block->previous_hash,block->hash_len); off+=block->hash_len;
+    memcpy(block_data+off,block->hash,block->hash_len); off+=block->hash_len;
+    for(int i=0;i<block->validator_count;i++){
+        size_t ln=strlen(block->validators[i])+1;
+        memcpy(block_data+off,block->validators[i],ln);
+        off+=ln;
+    }
+
+    if(OQS_SIG_sign(sig, block->signatures[vidx], &block->signature_lens[vidx],
+                    block_data, off, private_key)!=OQS_SUCCESS){
+        printf("Failed signing block.\n");
+        free(private_key);
+        OQS_SIG_free(sig);
+        exit(1);
+    }
+
+    printf("Block signed by '%s'.\n", validator_username);
+    free(private_key);
+    OQS_SIG_free(sig);
+}
+
+int verify_block_signatures(Block *block){
+    int all_valid=1;
+    OQS_SIG*sig=OQS_SIG_new("Dilithium2");
+    if(!sig){
+        printf("Dilithium2 init fail.\n");
+        exit(1);
+    }
+
+    unsigned char block_data[8192];
+    size_t off=0;
+    memcpy(block_data+off,&block->index,sizeof(block->index)); off+=sizeof(block->index);
+    memcpy(block_data+off,&block->timestamp,sizeof(block->timestamp)); off+=sizeof(block->timestamp);
+    memcpy(block_data+off,block->transactions,sizeof(Transaction)*block->transaction_count);
+    off+=sizeof(Transaction)*block->transaction_count;
+    memcpy(block_data+off,block->previous_hash,block->hash_len); off+=block->hash_len;
+    memcpy(block_data+off,block->hash,block->hash_len); off+=block->hash_len;
+    for(int i=0;i<block->validator_count;i++){
+        size_t ln=strlen(block->validators[i])+1;
+        memcpy(block_data+off,block->validators[i],ln);
+        off+=ln;
+    }
+
+    for(int i=0;i<block->validator_count;i++){
+        User*u=find_user(block->validators[i]);
+        if(!u){
+            printf("Validator '%s' not found.\n", block->validators[i]);
+            all_valid=0;
+            continue;
+        }
+        if(u->public_key_len==0){
+            printf("Public key '%s' len=0.\n", u->username);
+            all_valid=0;
+            continue;
+        }
+        int r=(OQS_SIG_verify(sig, block_data, off,
+                              block->signatures[i], block->signature_lens[i],
+                              u->public_key)==OQS_SUCCESS);
+        if(r){
+            // success
+        } else {
+            printf("Block %d sig verify fail for '%s'.\n", block->index,u->username);
+            all_valid=0;
+        }
+    }
+    OQS_SIG_free(sig);
+    return all_valid;
+}
+
+void sign_pending_block(const char *validator_username){
+    if(!pending_block){
+        printf("No pending block.\n");
+        return;
+    }
+
+    int vidx=-1;
+    for(int i=0;i<pending_block->validator_count;i++){
+        if(strcmp(pending_block->validators[i],validator_username)==0){
+            vidx=i;break;
+        }
+    }
+    if(vidx==-1){
+        printf("User '%s' is not validator for pending.\n", validator_username);
+        return;
+    }
+
+    // -- ADD SLASHING FOR DOUBLE SIGN --
+    if(pending_block->signature_lens[vidx]>0){
+        printf("User '%s' has ALREADY signed this pending block.\n", validator_username);
+
+        // Slash the user's stake for double-sign attempt
+        slash_user_stake(validator_username, SLASH_PENALTY);
+
+        printf("Slashed %.2f from '%s' for double-sign attempt!\n", 
+               SLASH_PENALTY, validator_username);
+        return;
+    }
+
+    // sign normally
+    sign_block(pending_block, validator_username);
+    save_pending_block();
+
+    printf("User '%s' has signed the pending block.\n", validator_username);
+
+    // check if all signed
+    int all_signed=1;
+    for(int i=0;i<pending_block->validator_count;i++){
+        if(pending_block->signature_lens[i]==0){
+            all_signed=0;break;
+        }
+    }
+    if(all_signed){
+        printf("All validators signed. Finalizing.\n");
+        finalize_block();
+    } else {
+        printf("Waiting for others.\n");
+    }
+}
+
+void save_pending_block(){
+    if(!pending_block) return;
+    FILE*fp=fopen("pending_block.dat","wb");
+    if(!fp){
+        printf("Unable to save pending block.\n");
+        return;
+    }
+    fwrite(pending_block,sizeof(Block),1,fp);
+    fclose(fp);
+}
+
+void load_pending_block(){
+    FILE*fp=fopen("pending_block.dat","rb");
+    if(!fp){
+        pending_block=NULL;
+        return;
+    }
+    if(!pending_block){
+        pending_block=malloc(sizeof(Block));
+        if(!pending_block){
+            printf("OOM pending_block.\n");
+            fclose(fp);
             return;
         }
-        fseek(fp, 0, SEEK_END);
-        user->public_key_len = ftell(fp);
-        fseek(fp, 0, SEEK_SET);
-        fread(user->public_key, 1, user->public_key_len, fp);
-        fclose(fp);
-        printf("Debug: Loaded public key for user '%s'.\n", user->username);
-    } else {
-        memset(user->public_key, 0, sizeof(user->public_key));
-        user->public_key_len = 0;
-        printf("Debug: Public key not found for user '%s'.\n", user->username);
+    }
+    size_t r=fread(pending_block,sizeof(Block),1,fp);
+    fclose(fp);
+    if(r==0){
+        free(pending_block);
+        pending_block=NULL;
+        printf("Fail read pending.\n");
     }
 }
 
-// Function to display the entire blockchain
-void display_blockchain() {
-    printf("display_blockchain: Displaying blockchain...\n");
-
-    Block *current_block = blockchain;
-    while (current_block != NULL) {
-        printf("\nBlock Index: %d\n", current_block->index);
-        printf("Timestamp: %s", ctime(&current_block->timestamp));
-        printf("Validators: ");
-        for (int i = 0; i < current_block->validator_count; i++) {
-            printf("%s ", current_block->validators[i]);
-        }
-        printf("\nPrevious Hash: ");
-        print_hash(current_block->previous_hash, current_block->hash_len);
-        printf("\nHash: ");
-        print_hash(current_block->hash, current_block->hash_len);
-        printf("\nTransactions:\n");
-        for (int i = 0; i < current_block->transaction_count; i++) {
-            Transaction *tx = &current_block->transactions[i];
-            char timestamp_str[26];
-            ctime_r(&tx->timestamp, timestamp_str);
-            timestamp_str[strlen(timestamp_str) - 1] = '\0'; // Remove newline
-
-            if (strlen(tx->sender) == 0) {
-                // System transaction (e.g., faucet)
-                printf("  [%s] ID: %d, System -> %s, Amount: %.2f tokens\n",
-                       timestamp_str, tx->id, tx->recipient, tx->amount);
-            } else {
-                printf("  [%s] ID: %d, From: %s, To: %s, Amount: %.2f tokens\n",
-                       timestamp_str, tx->id, tx->sender, tx->recipient, tx->amount);
-            }
-        }
-
-        // Print the signatures
-        printf("Signatures:\n");
-        for (int i = 0; i < current_block->validator_count; i++) {
-            printf("Validator '%s' Signature:\n", current_block->validators[i]);
-            if (current_block->signature_lens[i] == 0) {
-                printf("  No signature from this validator.\n");
-                continue;
-            }
-            for (size_t j = 0; j < current_block->signature_lens[i]; j++) {
-                printf("%02x", current_block->signatures[i][j]);
-                if ((j + 1) % 32 == 0) { // Print 32 bytes per line
-                    printf("\n");
-                }
-            }
-            if (current_block->signature_lens[i] % 32 != 0) {
-                printf("\n");
-            }
-        }
-
-        current_block = current_block->next;
-    }
-}
-
-// Function to add a transaction to the pending transactions list
-void add_transaction(Transaction *new_transaction) {
-    printf("add_transaction: Adding a new transaction.\n");
-
-    Transaction *current_tx = pending_transactions;
-    if (current_tx == NULL) {
-        pending_transactions = new_transaction;
+void add_transaction(Transaction*newtx){
+    Transaction*pt=pending_transactions;
+    if(!pt){
+        pending_transactions=newtx;
     } else {
-        while (current_tx->next != NULL)
-            current_tx = current_tx->next;
-        current_tx->next = new_transaction;
+        while(pt->next) pt=pt->next;
+        pt->next=newtx;
     }
-
-    // Check if we have enough transactions to create a new block
-    int tx_count = 0;
-    current_tx = pending_transactions;
-    while (current_tx != NULL) {
-        tx_count++;
-        current_tx = current_tx->next;
+    int c=0;
+    pt=pending_transactions;
+    while(pt){
+        c++;pt=pt->next;
     }
-    printf("add_transaction: Pending transactions count: %d\n", tx_count);
-
-    // If pending transactions reach the threshold, display the next validators
-    if (tx_count >= MAX_TRANSACTIONS_PER_BLOCK) {
-        printf("add_transaction: Pending transactions have reached %d.\n", MAX_TRANSACTIONS_PER_BLOCK);
-        printf("add_transaction: Selecting the next validators...\n");
-        char selected_validators[MAX_VALIDATORS_PER_BLOCK][MAX_USERNAME_LENGTH];
-        int validator_count = 0;
-        select_validators(selected_validators, &validator_count);
-        if (validator_count > 0) {
+    printf("Pending tx count: %d\n", c);
+    if(c>=MAX_TRANSACTIONS_PER_BLOCK){
+        printf("Reached threshold %d.\n", MAX_TRANSACTIONS_PER_BLOCK);
+        printf("Selecting next validators...\n");
+        char vals[MAX_VALIDATORS_PER_BLOCK][MAX_USERNAME_LENGTH];
+        int vcnt=0;
+        select_validators(vals,&vcnt);
+        if(vcnt>0){
             printf("The next validators are: ");
-            for (int i = 0; i < validator_count; i++) {
-                printf("%s ", selected_validators[i]);
+            for(int i=0;i<vcnt;i++){
+                printf("%s ", vals[i]);
             }
             printf("\n");
         } else {
@@ -997,1046 +1049,545 @@ void add_transaction(Transaction *new_transaction) {
     }
 }
 
-// PAM conversation function
-int pam_conversation(int num_msg, const struct pam_message **msg,
-                     struct pam_response **resp, void *appdata_ptr) {
-    struct pam_response *reply = NULL;
-    if (num_msg <= 0) {
-        return PAM_CONV_ERR;
-    }
-
-    reply = (struct pam_response *)calloc(num_msg, sizeof(struct pam_response));
-    if (reply == NULL) {
-        return PAM_BUF_ERR;
-    }
-
-    for (int i = 0; i < num_msg; ++i) {
-        if (msg[i]->msg_style == PAM_PROMPT_ECHO_OFF || msg[i]->msg_style == PAM_PROMPT_ECHO_ON) {
-            reply[i].resp = strdup((const char *)appdata_ptr);
-            reply[i].resp_retcode = 0;
-        } else {
-            free(reply);
-            return PAM_CONV_ERR;
-        }
-    }
-
-    *resp = reply;
-    return PAM_SUCCESS;
-}
-
-// Function to handle user login using PAM
-void user_login() {
-    printf("user_login: Starting login process.\n");
-
-    char username[MAX_USERNAME_LENGTH];
-    char *password;
-    pam_handle_t *pamh = NULL;
-    int retval;
-
-    // Get the username
-    printf("Enter username: ");
-    scanf("%99s", username);
-
-    // Ensure keys are generated before login
-    printf("Debug: Ensuring keys are generated for '%s'.\n", username);
-    generate_keys_for_user(username);
-
-    // Get the password securely
-    password = getpass("Enter password: ");
-
-    // Set up PAM conversation
-    struct pam_conv conv = {
-        pam_conversation,
-        password
-    };
-
-    // Start PAM authentication
-    retval = pam_start("login", username, &conv, &pamh);
-    if (retval != PAM_SUCCESS) {
-        printf("pam_start failed: %s\n", pam_strerror(pamh, retval));
+void send_transaction(){
+    if(strlen(current_user)==0){
+        printf("No user logged in.\n");
         return;
     }
-
-    retval = pam_authenticate(pamh, 0);
-    if (retval != PAM_SUCCESS) {
-        printf("Authentication failed: %s\n", pam_strerror(pamh, retval));
-        pam_end(pamh, retval);
-        return;
-    }
-
-    retval = pam_acct_mgmt(pamh, 0);
-    if (retval != PAM_SUCCESS) {
-        printf("Account management failed: %s\n", pam_strerror(pamh, retval));
-        pam_end(pamh, retval);
-        return;
-    }
-
-    // Authentication successful
-    pam_end(pamh, PAM_SUCCESS);
-
-    // Clear password from memory
-    memset(password, 0, strlen(password));
-
-    // Add user to the users list if not already present
-    add_user_if_not_exists(username);
-
-    // Ensure the public key is loaded
-    User *current_user_ptr = users;
-    while (current_user_ptr != NULL) {
-        if (strcmp(current_user_ptr->username, username) == 0) {
-            if (current_user_ptr->public_key_len == 0) {
-                load_user_public_key(current_user_ptr);
-            }
-            break;
-        }
-        current_user_ptr = current_user_ptr->next;
-    }
-
-    // Set current user role
-    if (is_user_in_blockusers_group(username)) {
-        strcpy(current_role, "blockuser");
-        printf("Blockuser login successful!\n");
-    } else {
-        strcpy(current_role, "user");
-        printf("User login successful!\n");
-    }
-
-    // Update current_user
-    strncpy(current_user, username, sizeof(current_user) - 1);
-    current_user[sizeof(current_user) - 1] = '\0';
-
-    printf("Welcome, %s!\n", username);
-
-    // Load pending block if any
-    load_pending_block();
-
-    // Log the login event
-    char event_description[256];
-    snprintf(event_description, sizeof(event_description), "User '%s' logged in.", username);
-    log_event(event_description);
-}
-
-// Function to generate keys for a user (using Dilithium2)
-void generate_keys_for_user(const char *username) {
-    char private_key_filename[256];
-    char public_key_filename[256];
-
-    // Get the user's home directory
-    struct passwd *pwd = getpwnam(username);
-    if (pwd == NULL) {
-        printf("Failed to get home directory for user '%s'.\n", username);
-        exit(1);
-    }
-
-    // Ensure the keys directory exists in the user's home directory
-    char keys_dir[512];
-    snprintf(keys_dir, sizeof(keys_dir), "%s/.blockchain_keys", pwd->pw_dir);
-    struct stat st = {0};
-    if (stat(keys_dir, &st) == -1) {
-        if (mkdir(keys_dir, 0700) != 0) {
-            printf("Failed to create keys directory '%s' for user '%s'.\n", keys_dir, username);
-            exit(1);
-        }
-    }
-
-    snprintf(private_key_filename, sizeof(private_key_filename), "%s/%s_private.key", keys_dir, username);
-    snprintf(public_key_filename, sizeof(public_key_filename), "%s/%s_public.key", keys_dir, username);
-
-    // Debugging: Print the key filenames
-    printf("Debug: Generating keys for user '%s'.\n", username);
-    printf("Debug: Private key path: %s\n", private_key_filename);
-    printf("Debug: Public key path: %s\n", public_key_filename);
-
-    // Check if keys already exist
-    if (access(private_key_filename, F_OK) != -1 && access(public_key_filename, F_OK) != -1) {
-        printf("Keys already exist for user '%s'.\n", username);
-        return;
-    }
-
-    printf("Debug: Keys do not exist for '%s'. Generating keys.\n", username);
-
-    // Initialize the signature object
-    OQS_SIG *sig = OQS_SIG_new("Dilithium2");
-    if (sig == NULL) {
-        printf("Failed to initialize Dilithium2 signature object.\n");
-        exit(1);
-    }
-
-    // Allocate memory for keys
-    unsigned char *public_key = malloc(sig->length_public_key);
-    unsigned char *private_key = malloc(sig->length_secret_key);
-
-    // Generate key pair
-    if (OQS_SIG_keypair(sig, public_key, private_key) != OQS_SUCCESS) {
-        printf("Failed to generate key pair for user '%s'.\n", username);
-        exit(1);
-    }
-
-    // Save keys to files
-    FILE *fp = fopen(private_key_filename, "wb");
-    if (!fp) {
-        printf("Failed to save private key for user '%s'.\n", username);
-        printf("Debug: Check file permissions and directory existence.\n");
-        exit(1);
-    }
-    fwrite(private_key, 1, sig->length_secret_key, fp);
-    fclose(fp);
-
-    // Set file permissions to owner read/write only
-    chmod(private_key_filename, 0600);
-
-    fp = fopen(public_key_filename, "wb");
-    if (!fp) {
-        printf("Failed to save public key for user '%s'.\n", username);
-        printf("Debug: Check file permissions and directory existence.\n");
-        exit(1);
-    }
-    fwrite(public_key, 1, sig->length_public_key, fp);
-    fclose(fp);
-
-    // Set file permissions to owner read/write and group/others read
-    chmod(public_key_filename, 0644);
-
-    printf("Generated Dilithium2 keys for user '%s'.\n", username);
-
-    // Clean up
-    OQS_SIG_free(sig);
-    free(public_key);
-    free(private_key);
-}
-
-// Function to add users from blockusers group to the users list
-void load_blockusers_into_users() {
-    printf("load_blockusers_into_users: Loading blockusers into users list.\n");
-
-    struct passwd *pwd;
-    setpwent();
-    while ((pwd = getpwent()) != NULL) {
-        if (is_user_in_blockusers_group(pwd->pw_name)) {
-            add_user_if_not_exists(pwd->pw_name);
-        }
-    }
-    endpwent();
-}
-
-// Function to add a user to the users list if not already present
-void add_user_if_not_exists(const char *username) {
-    printf("Debug: Checking if user '%s' exists in users list.\n", username);
-
-    User *current_user_ptr = users;
-    while (current_user_ptr != NULL) {
-        if (strcmp(current_user_ptr->username, username) == 0) {
-            // User already exists
-            printf("Debug: User '%s' already exists in users list.\n", username);
-            return;
-        }
-        current_user_ptr = current_user_ptr->next;
-    }
-
-    printf("Debug: Adding new user '%s' to users list.\n", username);
-
-    // Add new user
-    User *new_user = (User *)malloc(sizeof(User));
-    strncpy(new_user->username, username, MAX_USERNAME_LENGTH - 1);
-    new_user->username[MAX_USERNAME_LENGTH - 1] = '\0';
-    new_user->balance = 0.0;
-    // Initialize stake to 0
-    new_user->stake = 0.0;
-    // Load public key
-    load_user_public_key(new_user);
-
-    new_user->next = users;
-    users = new_user;
-}
-
-// ADDED: Function to find a user by username
-User *find_user(const char *username) {
-    User *u = users;
-    while (u != NULL) {
-        if (strcmp(u->username, username) == 0) {
-            return u;
-        }
-        u = u->next;
-    }
-    return NULL;
-}
-
-// Function to handle user logout
-void user_logout() {
-    printf("user_logout: Logging out user '%s'.\n", current_user);
-
-    if (strlen(current_user) == 0) {
-        printf("No user is currently logged in.\n");
-        return;
-    }
-
-    // Log the logout event
-    char event_description[256];
-    snprintf(event_description, sizeof(event_description), "User '%s' logged out.", current_user);
-    log_event(event_description);
-
-    // Clear current_user and current_role
-    printf("User %s has been logged out successfully.\n", current_user);
-    current_user[0] = '\0';
-    current_role[0] = '\0';
-}
-
-// Function to send a transaction
-void send_transaction() {
-    printf("send_transaction: User '%s' initiating a transaction.\n", current_user);
-
-    if (strlen(current_user) == 0) {
-        printf("No user is currently logged in. Please log in to send a transaction.\n");
-        return;
-    }
-
     char recipient[MAX_RECIPIENT_LENGTH];
-    double amount;
-
+    double amt;
     printf("Enter recipient username: ");
     scanf("%99s", recipient);
-
-    printf("Enter amount to send (tokens): ");
-    if (scanf("%lf", &amount) != 1) {
-        printf("Invalid input. Transaction cancelled.\n");
-        while (getchar() != '\n'); // Clear input buffer
+    printf("Enter amount: ");
+    if(scanf("%lf",&amt)!=1){
+        printf("Invalid.\n");
+        while(getchar()!='\n');
         return;
     }
-
-    if (amount <= 0) {
-        printf("Invalid amount. Please enter a positive value.\n");
+    if(amt<=0){
+        printf("Amount must be >0.\n");
         return;
     }
-
-    // Check if sender has sufficient balance
-    double sender_balance = get_user_balance(current_user);
-    if (amount > sender_balance) {
-        printf("Insufficient balance. Your balance is %.2f tokens. Transaction cancelled.\n", sender_balance);
+    double bal=get_user_balance(current_user);
+    if(amt>bal){
+        printf("Insufficient balance.\n");
         return;
     }
-
-    // Add recipient to the users list if not already present
     add_user_if_not_exists(recipient);
 
-    Transaction *new_transaction = (Transaction *)malloc(sizeof(Transaction));
-    if (!new_transaction) {
-        printf("Failed to create transaction. Memory allocation error.\n");
-        return;
-    }
+    Transaction*tx=malloc(sizeof(Transaction));
+    tx->id=++last_transaction_id;
+    tx->type=TRANSACTION_NORMAL;
+    strncpy(tx->sender,current_user,MAX_USERNAME_LENGTH-1);
+    tx->sender[MAX_USERNAME_LENGTH-1]='\0';
+    strncpy(tx->recipient,recipient,MAX_RECIPIENT_LENGTH-1);
+    tx->recipient[MAX_RECIPIENT_LENGTH-1]='\0';
+    tx->amount=amt;
+    tx->timestamp=time(NULL);
+    tx->next=NULL;
 
-    new_transaction->id = ++last_transaction_id;
-    new_transaction->type = TRANSACTION_NORMAL;
-    strncpy(new_transaction->sender, current_user, MAX_USERNAME_LENGTH - 1);
-    new_transaction->sender[MAX_USERNAME_LENGTH - 1] = '\0';
-
-    strncpy(new_transaction->recipient, recipient, MAX_RECIPIENT_LENGTH - 1);
-    new_transaction->recipient[MAX_RECIPIENT_LENGTH - 1] = '\0';
-
-    new_transaction->amount = amount;
-    new_transaction->timestamp = time(NULL);
-    new_transaction->next = NULL;
-
-    // Add transaction to pending transactions
-    add_transaction(new_transaction);
-
-    printf("Transaction from '%s' to '%s' for amount %.2f tokens has been created with ID %d.\n",
-           current_user, recipient, amount, new_transaction->id);
+    add_transaction(tx);
+    printf("TX from '%s' to '%s' amt=%.2f ID=%d\n", current_user, recipient, amt, tx->id);
 }
 
-// Function to view the current user's transaction history
-void view_transactions() {
-    printf("view_transactions: Displaying transactions for user '%s'.\n", current_user);
-
-    if (strlen(current_user) == 0) {
-        printf("No user is currently logged in.\n");
+void view_transactions(){
+    if(strlen(current_user)==0){
+        printf("No user logged in.\n");
         return;
     }
-
-    int found = 0;
-    Block *current_block = blockchain;
-    while (current_block != NULL) {
-        for (int i = 0; i < current_block->transaction_count; i++) {
-            Transaction *tx = &current_block->transactions[i];
-            if (strcmp(tx->sender, current_user) == 0 || strcmp(tx->recipient, current_user) == 0) {
-                char timestamp_str[26];
-                ctime_r(&tx->timestamp, timestamp_str);
-                timestamp_str[strlen(timestamp_str) - 1] = '\0'; // Remove newline
-
-                if (strlen(tx->sender) == 0) {
-                    // System transaction
-                    printf("[%s] ID: %d, System -> %s, Amount: %.2f tokens\n",
-                           timestamp_str, tx->id, tx->recipient, tx->amount);
+    int found=0;
+    Block*b=blockchain;
+    while(b){
+        for(int i=0;i<b->transaction_count;i++){
+            Transaction*tx=&b->transactions[i];
+            if(strcmp(tx->sender,current_user)==0 || strcmp(tx->recipient,current_user)==0){
+                char ts[26]; ctime_r(&tx->timestamp,ts);
+                ts[strlen(ts)-1]='\0';
+                if(strlen(tx->sender)==0){
+                    printf("[%s] ID:%d Sys->%s Amt:%.2f\n", ts,tx->id,tx->recipient,tx->amount);
                 } else {
-                    printf("[%s] ID: %d, From: %s, To: %s, Amount: %.2f tokens\n",
-                           timestamp_str, tx->id, tx->sender, tx->recipient, tx->amount);
+                    printf("[%s] ID:%d From:%s To:%s Amt:%.2f\n",
+                           ts, tx->id, tx->sender, tx->recipient, tx->amount);
                 }
-                found = 1;
+                found=1;
             }
         }
-        current_block = current_block->next;
+        b=b->next;
     }
-
-    // Also check pending transactions
-    Transaction *current_tx = pending_transactions;
-    while (current_tx != NULL) {
-        if (strcmp(current_tx->sender, current_user) == 0 || strcmp(current_tx->recipient, current_user) == 0) {
-            char timestamp_str[26];
-            ctime_r(&current_tx->timestamp, timestamp_str);
-            timestamp_str[strlen(timestamp_str) - 1] = '\0'; // Remove newline
-
-            if (strlen(current_tx->sender) == 0) {
-                // System transaction
-                printf("[%s] ID: %d, System -> %s, Amount: %.2f tokens (Pending)\n",
-                       timestamp_str, current_tx->id, current_tx->recipient, current_tx->amount);
+    Transaction*pt=pending_transactions;
+    while(pt){
+        if(strcmp(pt->sender,current_user)==0 || strcmp(pt->recipient,current_user)==0){
+            char ts[26]; ctime_r(&pt->timestamp,ts);
+            ts[strlen(ts)-1]='\0';
+            if(strlen(pt->sender)==0){
+                printf("[%s] ID:%d Sys->%s Amt:%.2f (Pending)\n",
+                       ts,pt->id,pt->recipient,pt->amount);
             } else {
-                printf("[%s] ID: %d, From: %s, To: %s, Amount: %.2f tokens (Pending)\n",
-                       timestamp_str, current_tx->id, current_tx->sender, current_tx->recipient, current_tx->amount);
+                printf("[%s] ID:%d From:%s To:%s Amt:%.2f (Pending)\n",
+                       ts,pt->id,pt->sender,pt->recipient,pt->amount);
             }
-            found = 1;
+            found=1;
         }
-        current_tx = current_tx->next;
+        pt=pt->next;
     }
-
-    if (!found) {
-        printf("No transactions found for user %s.\n", current_user);
+    if(!found){
+        printf("No transactions for '%s'.\n", current_user);
     }
 }
 
-// Function to view all transactions
-void view_all_transactions() {
-    printf("view_all_transactions: Displaying all transactions.\n");
-
-    Block *current_block = blockchain;
-    printf("\n--- All Transactions ---\n");
-    while (current_block != NULL) {
-        for (int i = 0; i < current_block->transaction_count; i++) {
-            Transaction *tx = &current_block->transactions[i];
-            char timestamp_str[26];
-            ctime_r(&tx->timestamp, timestamp_str);
-            timestamp_str[strlen(timestamp_str) - 1] = '\0'; // Remove newline
-
-            if (strlen(tx->sender) == 0) {
-                // System transaction
-                printf("[%s] ID: %d, System -> %s, Amount: %.2f tokens\n",
-                       timestamp_str, tx->id, tx->recipient, tx->amount);
+void view_all_transactions(){
+    Block*b=blockchain;
+    printf("--- All TX ---\n");
+    while(b){
+        for(int i=0;i<b->transaction_count;i++){
+            Transaction*tx=&b->transactions[i];
+            char ts[26]; ctime_r(&tx->timestamp,ts);
+            ts[strlen(ts)-1]='\0';
+            if(strlen(tx->sender)==0){
+                printf("[%s] ID:%d Sys->%s Amt:%.2f\n",
+                       ts,tx->id,tx->recipient,tx->amount);
             } else {
-                printf("[%s] ID: %d, From: %s, To: %s, Amount: %.2f tokens\n",
-                       timestamp_str, tx->id, tx->sender, tx->recipient, tx->amount);
+                printf("[%s] ID:%d From:%s To:%s Amt:%.2f\n",
+                       ts,tx->id,tx->sender,tx->recipient,tx->amount);
             }
         }
-        current_block = current_block->next;
+        b=b->next;
     }
-
-    // Also display pending transactions
-    Transaction *current_tx = pending_transactions;
-    while (current_tx != NULL) {
-        char timestamp_str[26];
-        ctime_r(&current_tx->timestamp, timestamp_str);
-        timestamp_str[strlen(timestamp_str) - 1] = '\0'; // Remove newline
-
-        if (strlen(current_tx->sender) == 0) {
-            // System transaction
-            printf("[%s] ID: %d, System -> %s, Amount: %.2f tokens (Pending)\n",
-                   timestamp_str, current_tx->id, current_tx->recipient, current_tx->amount);
+    Transaction*pt=pending_transactions;
+    while(pt){
+        char ts[26]; ctime_r(&pt->timestamp,ts);
+        ts[strlen(ts)-1]='\0';
+        if(strlen(pt->sender)==0){
+            printf("[%s] ID:%d Sys->%s Amt:%.2f (Pending)\n",
+                   ts,pt->id,pt->recipient,pt->amount);
         } else {
-            printf("[%s] ID: %d, From: %s, To: %s, Amount: %.2f tokens (Pending)\n",
-                   timestamp_str, current_tx->id, current_tx->sender, current_tx->recipient, current_tx->amount);
+            printf("[%s] ID:%d From:%s To:%s Amt:%.2f (Pending)\n",
+                   ts,pt->id,pt->sender,pt->recipient,pt->amount);
         }
-        current_tx = current_tx->next;
+        pt=pt->next;
     }
 }
 
-// Function to view pending transactions
-void view_pending_transactions() {
-    printf("view_pending_transactions: Displaying pending transactions.\n");
-
-    if (pending_transactions == NULL) {
-        printf("There are no pending transactions at the moment.\n");
+void view_pending_transactions(){
+    if(!pending_transactions){
+        printf("No pending transactions.\n");
         return;
     }
-
-    Transaction *current_tx = pending_transactions;
-    printf("\n--- Pending Transactions ---\n");
-    while (current_tx != NULL) {
-        char timestamp_str[26];
-        ctime_r(&current_tx->timestamp, timestamp_str);
-        timestamp_str[strlen(timestamp_str) - 1] = '\0'; // Remove newline
-
-        if (strlen(current_tx->sender) == 0) {
-            // System transaction
-            printf("[%s] ID: %d, System -> %s, Amount: %.2f tokens\n",
-                   timestamp_str, current_tx->id, current_tx->recipient, current_tx->amount);
+    Transaction*pt=pending_transactions;
+    while(pt){
+        char ts[26]; ctime_r(&pt->timestamp,ts);
+        ts[strlen(ts)-1]='\0';
+        if(strlen(pt->sender)==0){
+            printf("[%s] ID:%d Sys->%s Amt:%.2f\n",
+                   ts,pt->id,pt->recipient,pt->amount);
         } else {
-            printf("[%s] ID: %d, From: %s, To: %s, Amount: %.2f tokens\n",
-                   timestamp_str, current_tx->id, current_tx->sender, current_tx->recipient, current_tx->amount);
+            printf("[%s] ID:%d From:%s To:%s Amt:%.2f\n",
+                   ts,pt->id,pt->sender,pt->recipient,pt->amount);
         }
-
-        current_tx = current_tx->next;
+        pt=pt->next;
     }
 }
 
-// Function to cancel a pending transaction
-void cancel_pending_transaction() {
-    printf("cancel_pending_transaction: Cancelling a pending transaction.\n");
-
-    if (pending_transactions == NULL) {
-        printf("There are no pending transactions to cancel.\n");
+void cancel_pending_transaction(){
+    if(!pending_transactions){
+        printf("No pending to cancel.\n");
         return;
     }
-
-    int transaction_id;
-    printf("Enter the Transaction ID to cancel: ");
-    if (scanf("%d", &transaction_id) != 1) {
-        printf("Invalid input.\n");
-        while (getchar() != '\n'); // Clear input buffer
+    int tid;
+    printf("Enter TX ID to cancel: ");
+    if(scanf("%d",&tid)!=1){
+        printf("Invalid.\n");
+        while(getchar()!='\n');
         return;
     }
-
-    Transaction *current_tx = pending_transactions;
-    Transaction *prev_tx = NULL;
-    while (current_tx != NULL) {
-        if (current_tx->id == transaction_id && strcmp(current_tx->sender, current_user) == 0) {
-            // Found the transaction
-            if (prev_tx == NULL) {
-                // It's the first transaction in the list
-                pending_transactions = current_tx->next;
+    Transaction*cur=pending_transactions;
+    Transaction*prev=NULL;
+    while(cur){
+        if(cur->id==tid && strcmp(cur->sender,current_user)==0){
+            if(!prev){
+                pending_transactions=cur->next;
             } else {
-                prev_tx->next = current_tx->next;
+                prev->next=cur->next;
             }
-            free(current_tx);
-            printf("Transaction ID %d has been cancelled.\n", transaction_id);
+            free(cur);
+            printf("Transaction %d canceled.\n", tid);
             return;
         }
-        prev_tx = current_tx;
-        current_tx = current_tx->next;
+        prev=cur;
+        cur=cur->next;
     }
-
-    printf("Transaction ID %d not found or you are not authorized to cancel it.\n", transaction_id);
+    printf("TX %d not found or not authorized.\n", tid);
 }
 
-// Function to update user balance
-void update_user_balance(const char *username, double amount) {
-    User *current_user_ptr = users;
-    while (current_user_ptr != NULL) {
-        if (strcmp(current_user_ptr->username, username) == 0) {
-            current_user_ptr->balance += amount;
+//================= BALANCE & STAKE ===================
+
+void update_user_balance(const char*username, double amount){
+    User*u=users;
+    while(u){
+        if(strcmp(u->username,username)==0){
+            u->balance+=amount;
             return;
         }
-        current_user_ptr = current_user_ptr->next;
+        u=u->next;
     }
-    // User not found, add new user
     add_user_if_not_exists(username);
-    update_user_balance(username, amount);
+    update_user_balance(username,amount);
 }
 
-// Function to get user balance
-double get_user_balance(const char *username) {
-    User *current_user_ptr = users;
-    while (current_user_ptr != NULL) {
-        if (strcmp(current_user_ptr->username, username) == 0) {
-            return current_user_ptr->balance;
+double get_user_balance(const char*username){
+    User*u=users;
+    while(u){
+        if(strcmp(u->username,username)==0){
+            return u->balance;
         }
-        current_user_ptr = current_user_ptr->next;
+        u=u->next;
     }
     return 0.0;
 }
 
-// Function to request test tokens (now updates balance directly)
-void request_test_funds() {
-    printf("request_test_funds: User '%s' requesting test tokens.\n", current_user);
-
-    if (strlen(current_user) == 0) {
-        printf("No user is currently logged in. Please log in to request test tokens.\n");
+void request_test_funds(){
+    if(strlen(current_user)==0){
+        printf("No user logged in.\n");
         return;
     }
+    double amt=1000.0;
+    update_user_balance(current_user,amt);
 
-    double amount = 1000.0; // Amount of test tokens to grant
+    char desc[256];
+    snprintf(desc,sizeof(desc),"Test tokens %.2f credited to '%s'.",amt, current_user);
+    log_event(desc);
 
-    // Update user balance directly
-    update_user_balance(current_user, amount);
-
-    // Log the event
-    char event_description[256];
-    snprintf(event_description, sizeof(event_description),
-             "Test tokens of amount %.2f have been credited to '%s'.",
-             amount, current_user);
-    log_event(event_description);
-
-    printf("Test tokens of amount %.2f have been credited to '%s'.\n",
-           amount, current_user);
+    printf("Test tokens of %.2f credited to '%s'.\n", amt, current_user);
 }
 
-// Function to log events (login/logout) to a file
-void log_event(const char *event_description) {
-    FILE *file = fopen(TRANSACTION_LOG_FILE, "a");
-    if (!file) {
-        printf("Unable to open transaction log file.\n");
+// Simple slashing function
+void slash_user_stake(const char *username, double penalty) {
+    User*u=find_user(username);
+    if(!u){
+        return;  // not found, do nothing
+    }
+    u->stake -= penalty;
+    if(u->stake<0) {
+        u->stake=0;
+    }
+    printf("SLASH: '%s' stake reduced by %.2f. New stake=%.2f\n",
+           username, penalty, u->stake);
+}
+
+//================= LOGGING & AUTH ===================
+
+void log_event(const char *event_description){
+    FILE*fp=fopen(TRANSACTION_LOG_FILE,"a");
+    if(!fp){
+        printf("Cannot open log file.\n");
         return;
     }
-    time_t now = time(NULL);
-    char timestamp_str[26];
-    ctime_r(&now, timestamp_str);
-    timestamp_str[strlen(timestamp_str) - 1] = '\0'; // Remove newline
-    fprintf(file, "[%s] %s\n", timestamp_str, event_description);
-    fclose(file);
+    time_t now=time(NULL);
+    char ts[26]; ctime_r(&now,ts);
+    ts[strlen(ts)-1]='\0';
+    fprintf(fp,"[%s] %s\n", ts, event_description);
+    fclose(fp);
 }
 
-// Function to clean up the blockchain (free memory)
-void cleanup_blockchain() {
-    printf("cleanup_blockchain: Cleaning up blockchain...\n");
+void user_login(){
+    char username[MAX_USERNAME_LENGTH];
+    char*password;
+    pam_handle_t*pamh=NULL;
+    int retval;
 
-    Block *current = blockchain;
-    while (current) {
-        Block *temp = current;
-        current = current->next;
-        free(temp);
+    printf("Enter username: ");
+    scanf("%99s", username);
+
+    generate_keys_for_user(username);
+
+    password=getpass("Enter password: ");
+
+    struct pam_conv conv={
+        pam_conversation,
+        password
+    };
+    retval=pam_start("login",username,&conv,&pamh);
+    if(retval!=PAM_SUCCESS){
+        printf("pam_start fail: %s\n", pam_strerror(pamh,retval));
+        return;
     }
-    blockchain = NULL;
-}
-
-// Function to clean up pending transactions (free memory)
-void cleanup_pending_transactions() {
-    printf("cleanup_pending_transactions: Cleaning up pending transactions...\n");
-
-    Transaction *current = pending_transactions;
-    while (current) {
-        Transaction *temp = current;
-        current = current->next;
-        free(temp);
+    retval=pam_authenticate(pamh,0);
+    if(retval!=PAM_SUCCESS){
+        printf("Auth fail: %s\n", pam_strerror(pamh,retval));
+        pam_end(pamh,retval);
+        return;
     }
-    pending_transactions = NULL;
-}
-
-// Function to clean up users (free memory)
-void cleanup_users() {
-    printf("cleanup_users: Cleaning up user list...\n");
-
-    User *current = users;
-    while (current) {
-        User *temp = current;
-        current = current->next;
-        free(temp);
+    retval=pam_acct_mgmt(pamh,0);
+    if(retval!=PAM_SUCCESS){
+        printf("Acct mgmt fail: %s\n", pam_strerror(pamh,retval));
+        pam_end(pamh,retval);
+        return;
     }
-    users = NULL;
+    pam_end(pamh,PAM_SUCCESS);
+    memset(password,0,strlen(password));
+
+    add_user_if_not_exists(username);
+
+    User*usr=users;
+    while(usr){
+        if(strcmp(usr->username,username)==0){
+            if(usr->public_key_len==0){
+                load_user_public_key(usr);
+            }
+            break;
+        }
+        usr=usr->next;
+    }
+
+    if(is_user_in_blockusers_group(username)){
+        strcpy(current_role,"blockuser");
+        printf("Blockuser login successful!\n");
+    } else {
+        strcpy(current_role,"user");
+        printf("User login successful!\n");
+    }
+    strncpy(current_user,username,sizeof(current_user)-1);
+    current_user[sizeof(current_user)-1]='\0';
+
+    printf("Welcome, %s!\n", username);
+
+    load_pending_block();
+
+    char desc[256];
+    snprintf(desc,sizeof(desc),"User '%s' logged in.", username);
+    log_event(desc);
 }
 
-// Function to handle program exit and cleanup
-void cleanup_and_exit(int signum) {
-    printf("\nProgram terminated. Cleaning up and saving data.\n");
+void user_logout(){
+    if(strlen(current_user)==0){
+        printf("No user logged in.\n");
+        return;
+    }
+    char desc[256];
+    snprintf(desc,sizeof(desc),"User '%s' logged out.", current_user);
+    log_event(desc);
 
-    // Log the logout event if user is logged in
-    if (strlen(current_user) > 0) {
+    printf("User %s logged out.\n", current_user);
+    current_user[0]='\0';
+    current_role[0]='\0';
+}
+
+//================= STAKING ===================
+
+void stake_tokens(const char *username, double amount){
+    if(amount<=0){
+        printf("Stake must be positive.\n");
+        return;
+    }
+    User*u=find_user(username);
+    if(!u){
+        add_user_if_not_exists(username);
+        u=find_user(username);
+    }
+    if(u->balance<amount){
+        printf("Insufficient balance.\n");
+        return;
+    }
+    u->balance-=amount;
+    u->stake+=amount;
+    printf("You staked %.2f. new stake=%.2f\n", amount, u->stake);
+}
+
+void unstake_tokens(const char *username, double amount){
+    if(amount<=0){
+        printf("Unstake must be positive.\n");
+        return;
+    }
+    User*u=find_user(username);
+    if(!u){
+        printf("User not found.\n");
+        return;
+    }
+    if(u->stake<amount){
+        printf("Insufficient staked.\n");
+        return;
+    }
+    u->stake-=amount;
+    u->balance+=amount;
+    printf("You unstaked %.2f. remain=%.2f\n", amount, u->stake);
+}
+
+//================= VRF & VALIDATORS ===================
+
+double compute_vrf(const char *username, int round){
+    unsigned char hash_out[SHA256_DIGEST_LENGTH];
+    char input[256];
+    snprintf(input,sizeof(input),"%s-%d", username, round);
+    SHA256((unsigned char*)input, strlen(input), hash_out);
+
+    unsigned int rv=*(unsigned int*)hash_out;
+    return (double)rv / (double)UINT_MAX;
+}
+
+void select_validators(char selected_validators[MAX_VALIDATORS_PER_BLOCK][MAX_USERNAME_LENGTH],
+                       int *validator_count)
+{
+    int any_staked=0;
+    {
+        User*u=users;
+        while(u){
+            if(is_user_in_blockusers_group(u->username)&&u->stake>0.0){
+                any_staked=1;break;
+            }
+            u=u->next;
+        }
+    }
+    // top 3
+    double highest_scores[MAX_VALIDATORS_PER_BLOCK];
+    char highest_validators[MAX_VALIDATORS_PER_BLOCK][MAX_USERNAME_LENGTH];
+    for(int i=0;i<MAX_VALIDATORS_PER_BLOCK;i++){
+        highest_scores[i]=-1.0;
+        highest_validators[i][0]='\0';
+    }
+
+    int round=(blockchain? blockchain->index+1 : 1);
+
+    User*cur=users;
+    while(cur){
+        if(!is_user_in_blockusers_group(cur->username)){
+            cur=cur->next;
+            continue;
+        }
+        double vrf_val=compute_vrf(cur->username, round);
+        double score= any_staked ? (vrf_val * cur->stake) : vrf_val;
+
+        for(int i=0;i<MAX_VALIDATORS_PER_BLOCK;i++){
+            if(score>highest_scores[i]){
+                for(int j=MAX_VALIDATORS_PER_BLOCK-1;j>i;j--){
+                    highest_scores[j]=highest_scores[j-1];
+                    strncpy(highest_validators[j], highest_validators[j-1], MAX_USERNAME_LENGTH);
+                }
+                highest_scores[i]=score;
+                strncpy(highest_validators[i], cur->username, MAX_USERNAME_LENGTH);
+                break;
+            }
+        }
+        cur=cur->next;
+    }
+
+    *validator_count=0;
+    for(int i=0;i<MAX_VALIDATORS_PER_BLOCK;i++){
+        if(highest_validators[i][0]!='\0'){
+            strncpy(selected_validators[*validator_count], highest_validators[i], MAX_USERNAME_LENGTH);
+            (*validator_count)++;
+        }
+    }
+    printf("Validators selected: ");
+    for(int i=0;i<*validator_count;i++){
+        printf("%s ", selected_validators[i]);
+    }
+    printf("\n");
+}
+
+void check_and_create_block(){
+    load_pending_block();
+    if(pending_block){
+        int is_val=0, already_signed=0;
+        for(int i=0;i<pending_block->validator_count;i++){
+            if(strcmp(pending_block->validators[i], current_user)==0){
+                is_val=1;
+                if(pending_block->signature_lens[i]>0){
+                    already_signed=1;
+                }
+                break;
+            }
+        }
+        if(is_val){
+            if(!already_signed){
+                sign_pending_block(current_user);
+            } else {
+                printf("You have already signed the pending block.\n");
+            }
+        } else {
+            printf("You are not a validator for the pending block.\n");
+        }
+    } else {
+        // no pending
+        int c=0;
+        Transaction*pt=pending_transactions;
+        while(pt){
+            c++;
+            pt=pt->next;
+        }
+        if(c<MAX_TRANSACTIONS_PER_BLOCK){
+            printf("Not enough tx to create block.\n");
+            return;
+        }
+        create_new_block();
+    }
+}
+
+//================= CLEANUP & EXIT ===================
+
+void cleanup_blockchain(){
+    Block*b=blockchain;
+    while(b){
+        Block*tmp=b;
+        b=b->next;
+        free(tmp);
+    }
+    blockchain=NULL;
+}
+
+void cleanup_pending_transactions(){
+    Transaction*pt=pending_transactions;
+    while(pt){
+        Transaction*tmp=pt;
+        pt=pt->next;
+        free(tmp);
+    }
+    pending_transactions=NULL;
+}
+
+void cleanup_users(){
+    User*u=users;
+    while(u){
+        User*tmp=u;
+        u=u->next;
+        free(tmp);
+    }
+    users=NULL;
+}
+
+void cleanup_and_exit(int signum){
+    printf("\nProgram shutting down.\n");
+    if(strlen(current_user)>0){
         user_logout();
     }
-
     cleanup_pending_transactions();
     cleanup_blockchain();
     cleanup_users();
     exit(0);
 }
 
-// Function to compute a hash-based random value (simulating a VRF)
-double compute_vrf(const char *username, int round) {
-    unsigned char hash_output[SHA256_DIGEST_LENGTH];
-    char input[256];
-    snprintf(input, sizeof(input), "%s-%d", username, round);
-    SHA256((unsigned char*)input, strlen(input), hash_output);
-    // Convert the hash output to a double between 0 and 1
-    unsigned int random_value = *(unsigned int*)hash_output;
-    return (double)random_value / (double)UINT_MAX;
-}
-
-// Function to select validators for the next block
-void select_validators(char selected_validators[MAX_VALIDATORS_PER_BLOCK][MAX_USERNAME_LENGTH], int *validator_count) {
-    printf("select_validators: Selecting validators for the next block.\n");
-
-    double highest_scores[MAX_VALIDATORS_PER_BLOCK];
-    char highest_validators[MAX_VALIDATORS_PER_BLOCK][MAX_USERNAME_LENGTH];
-    for (int i = 0; i < MAX_VALIDATORS_PER_BLOCK; i++) {
-        highest_scores[i] = -1.0;
-        highest_validators[i][0] = '\0';
+//================= PAM ===================
+int pam_conversation(int num_msg, const struct pam_message **msg,
+                     struct pam_response **resp, void *appdata_ptr)
+{
+    struct pam_response *reply=NULL;
+    if(num_msg<=0){
+        return PAM_CONV_ERR;
     }
-
-    User *current_user_ptr = users;
-    int round = blockchain->index + 1; // Use the next block index as the round number
-
-    while (current_user_ptr != NULL) {
-        // Only consider users in the "blockusers" group
-        if (!is_user_in_blockusers_group(current_user_ptr->username)) {
-            current_user_ptr = current_user_ptr->next;
-            continue;
-        }
-
-        // Skip users with zero stake
-        if (current_user_ptr->stake <= 0.0) {
-            current_user_ptr = current_user_ptr->next;
-            continue;
-        }
-
-        double vrf_output = compute_vrf(current_user_ptr->username, round);
-        // Incorporate stake into final score
-        double score = vrf_output * current_user_ptr->stake;
-
-        // Check if this user's score is among the highest
-        for (int i = 0; i < MAX_VALIDATORS_PER_BLOCK; i++) {
-            if (score > highest_scores[i]) {
-                // Shift lower scores down
-                for (int j = MAX_VALIDATORS_PER_BLOCK - 1; j > i; j--) {
-                    highest_scores[j] = highest_scores[j - 1];
-                    strncpy(highest_validators[j], highest_validators[j - 1], MAX_USERNAME_LENGTH);
-                }
-                highest_scores[i] = score;
-                strncpy(highest_validators[i], current_user_ptr->username, MAX_USERNAME_LENGTH);
-                break;
-            }
-        }
-
-        current_user_ptr = current_user_ptr->next;
+    reply=(struct pam_response*)calloc(num_msg,sizeof(struct pam_response));
+    if(!reply){
+        return PAM_BUF_ERR;
     }
-
-    // Set the selected validators
-    *validator_count = 0;
-    for (int i = 0; i < MAX_VALIDATORS_PER_BLOCK; i++) {
-        if (highest_validators[i][0] != '\0') {
-            strncpy(selected_validators[*validator_count], highest_validators[i], MAX_USERNAME_LENGTH);
-            (*validator_count)++;
-        }
-    }
-
-    printf("Validators selected: ");
-    for (int i = 0; i < *validator_count; i++) {
-        printf("%s ", selected_validators[i]);
-    }
-    printf("\n");
-}
-
-// Function to check validator status and create block
-void check_and_create_block() {
-    printf("check_and_create_block: Checking validator status for user '%s'.\n", current_user);
-
-    // Load pending block if any
-    load_pending_block();
-
-    if (pending_block != NULL) {
-        // Check if current user is a validator and hasn't signed
-        int is_validator = 0;
-        int already_signed = 0;
-        for (int i = 0; i < pending_block->validator_count; i++) {
-            if (strcmp(pending_block->validators[i], current_user) == 0) {
-                is_validator = 1;
-                if (pending_block->signature_lens[i] > 0) {
-                    already_signed = 1;
-                }
-                break;
-            }
-        }
-
-        if (is_validator) {
-            if (!already_signed) {
-                sign_pending_block(current_user);
-            } else {
-                printf("You have already signed the pending block. Waiting for others.\n");
-            }
+    for(int i=0;i<num_msg;i++){
+        if(msg[i]->msg_style==PAM_PROMPT_ECHO_OFF||
+           msg[i]->msg_style==PAM_PROMPT_ECHO_ON)
+        {
+            reply[i].resp=strdup((const char*)appdata_ptr);
+            reply[i].resp_retcode=0;
         } else {
-            printf("You are not a validator for the pending block.\n");
-        }
-    } else {
-        // No pending block, check if enough transactions to create a new block
-        int tx_count = 0;
-        Transaction *current_tx = pending_transactions;
-        while (current_tx != NULL) {
-            tx_count++;
-            current_tx = current_tx->next;
-        }
-        if (tx_count < MAX_TRANSACTIONS_PER_BLOCK) {
-            printf("Not enough pending transactions to create a block. Need at least %d.\n", MAX_TRANSACTIONS_PER_BLOCK);
-            return;
-        }
-
-        // Attempt to create a new block
-        create_new_block();
-    }
-}
-
-// Function to sign a block with Dilithium2
-void sign_block(Block *block, const char *validator_username) {
-    // Check if validator_username is among the block's validators
-    int is_validator = 0;
-    int validator_index = -1;
-    for (int i = 0; i < block->validator_count; i++) {
-        if (strcmp(block->validators[i], validator_username) == 0) {
-            is_validator = 1;
-            validator_index = i;
-            break;
+            free(reply);
+            return PAM_CONV_ERR;
         }
     }
-    if (!is_validator) {
-        printf("User '%s' is not a validator for this block.\n", validator_username);
-        return;
-    }
-
-    // Get the validator's home directory
-    struct passwd *pwd = getpwnam(validator_username);
-    if (pwd == NULL) {
-        printf("Failed to get home directory for validator '%s'.\n", validator_username);
-        exit(1);
-    }
-
-    char private_key_filename[256];
-    snprintf(private_key_filename, sizeof(private_key_filename),
-             "%s/.blockchain_keys/%s_private.key", pwd->pw_dir, validator_username);
-
-    // Load the private key
-    FILE *fp = fopen(private_key_filename, "rb");
-    if (!fp) {
-        printf("Failed to open private key file for validator '%s'.\n", validator_username);
-        exit(1);
-    }
-
-    // Initialize the signature object
-    OQS_SIG *sig = OQS_SIG_new("Dilithium2");
-    if (sig == NULL) {
-        printf("Failed to initialize Dilithium2 signature object.\n");
-        exit(1);
-    }
-
-    unsigned char *private_key = malloc(sig->length_secret_key);
-    if (fread(private_key, 1, sig->length_secret_key, fp) != sig->length_secret_key) {
-        printf("Failed to read private key for validator '%s'.\n", validator_username);
-        fclose(fp);
-        OQS_SIG_free(sig);
-        free(private_key);
-        exit(1);
-    }
-    fclose(fp);
-
-    // Serialize the block data (excluding the signatures)
-    unsigned char block_data[8192];
-    size_t block_data_len = 0;
-
-    // Include block fields in block_data
-    // Exclude signatures to avoid circular dependency
-    memcpy(block_data + block_data_len, &block->index, sizeof(block->index));
-    block_data_len += sizeof(block->index);
-
-    memcpy(block_data + block_data_len, &block->timestamp, sizeof(block->timestamp));
-    block_data_len += sizeof(block->timestamp);
-
-    memcpy(block_data + block_data_len, block->transactions,
-           sizeof(Transaction) * block->transaction_count);
-    block_data_len += sizeof(Transaction) * block->transaction_count;
-
-    memcpy(block_data + block_data_len, block->previous_hash, block->hash_len);
-    block_data_len += block->hash_len;
-
-    memcpy(block_data + block_data_len, block->hash, block->hash_len);
-    block_data_len += block->hash_len;
-
-    // Include validators' usernames
-    for (int i = 0; i < block->validator_count; i++) {
-        size_t validator_len = strlen(block->validators[i]) + 1;
-        memcpy(block_data + block_data_len, block->validators[i], validator_len);
-        block_data_len += validator_len;
-    }
-
-    // Sign the block data
-    if (OQS_SIG_sign(sig, block->signatures[validator_index], &block->signature_lens[validator_index],
-                     block_data, block_data_len, private_key) != OQS_SUCCESS) {
-        printf("Failed to sign the block.\n");
-        OQS_SIG_free(sig);
-        free(private_key);
-        exit(1);
-    }
-
-    printf("Block signed by validator '%s' using Dilithium2.\n", validator_username);
-
-    // Clean up
-    OQS_SIG_free(sig);
-    free(private_key);
-}
-
-// Function to verify a block's signatures
-int verify_block_signatures(Block *block) {
-    int all_valid = 1;
-
-    // Initialize the signature object
-    OQS_SIG *sig = OQS_SIG_new("Dilithium2");
-    if (sig == NULL) {
-        printf("Failed to initialize Dilithium2 signature object.\n");
-        exit(1);
-    }
-
-    // Serialize the block data (excluding the signatures)
-    unsigned char block_data[8192];
-    size_t block_data_len = 0;
-
-    // Include block fields in block_data
-    memcpy(block_data + block_data_len, &block->index, sizeof(block->index));
-    block_data_len += sizeof(block->index);
-
-    memcpy(block_data + block_data_len, &block->timestamp, sizeof(block->timestamp));
-    block_data_len += sizeof(block->timestamp);
-
-    memcpy(block_data + block_data_len, block->transactions,
-           sizeof(Transaction) * block->transaction_count);
-    block_data_len += sizeof(Transaction) * block->transaction_count;
-
-    memcpy(block_data + block_data_len, block->previous_hash, block->hash_len);
-    block_data_len += block->hash_len;
-
-    memcpy(block_data + block_data_len, block->hash, block->hash_len);
-    block_data_len += block->hash_len;
-
-    // Include validators' usernames
-    for (int i = 0; i < block->validator_count; i++) {
-        size_t validator_len = strlen(block->validators[i]) + 1;
-        memcpy(block_data + block_data_len, block->validators[i], validator_len);
-        block_data_len += validator_len;
-    }
-
-    for (int i = 0; i < block->validator_count; i++) {
-        // Find the validator's public key
-        User *validator_user = users;
-        while (validator_user != NULL) {
-            if (strcmp(validator_user->username, block->validators[i]) == 0) {
-                break;
-            }
-            validator_user = validator_user->next;
-        }
-
-        if (validator_user == NULL) {
-            printf("Validator '%s' not found in user list.\n", block->validators[i]);
-            all_valid = 0;
-            continue;
-        }
-
-        if (validator_user->public_key_len == 0) {
-            printf("Public key for validator '%s' not loaded.\n", block->validators[i]);
-            all_valid = 0;
-            continue;
-        }
-
-        // Verify the signature
-        int result = OQS_SIG_verify(sig, block_data, block_data_len,
-                                    block->signatures[i], block->signature_lens[i],
-                                    validator_user->public_key) == OQS_SUCCESS;
-
-        if (result) {
-            printf("Block index %d signature verified successfully for validator '%s'.\n",
-                   block->index, block->validators[i]);
-        } else {
-            printf("Block index %d signature verification failed for validator '%s'.\n",
-                   block->index, block->validators[i]);
-            all_valid = 0;
-        }
-    }
-
-    // Clean up
-    OQS_SIG_free(sig);
-
-    return all_valid;
-}
-
-// Function to display a block's signatures and hash in hexadecimal format
-void print_block_signature(Block *block) {
-    printf("Block %d Signatures:\n", block->index);
-
-    // Print the signatures from all validators
-    for (int i = 0; i < block->validator_count; i++) {
-        printf("Validator '%s' Signature:\n", block->validators[i]);
-
-        if (block->signature_lens[i] == 0) {
-            printf("No signature from this validator.\n");
-            continue;
-        }
-
-        for (size_t j = 0; j < block->signature_lens[i]; j++) {
-            printf("%02x", block->signatures[i][j]);
-            if ((j + 1) % 32 == 0) {
-                printf("\n");
-            }
-        }
-        if (block->signature_lens[i] % 32 != 0) {
-            printf("\n");
-        }
-    }
-
-    // Print the block's hash to demonstrate linkage
-    printf("Block %d Hash:\n", block->index);
-    for (unsigned int i = 0; i < block->hash_len; i++) {
-        printf("%02x", block->hash[i]);
-    }
-    printf("\n");
-
-    // Verify the signatures and display the result
-    if (verify_block_signatures(block)) {
-        printf("All signatures are valid and tied to the block hash.\n");
-    } else {
-        printf("Some signatures failed verification. The block may have been tampered with.\n");
-    }
-}
-
-// Function to display Dilithium2 signatures for a specific block
-void display_dilithium2_signature_for_block(int block_index) {
-    Block *current_block = blockchain;
-
-    while (current_block != NULL) {
-        if (current_block->index == block_index) {
-            print_block_signature(current_block);
-            return;
-        }
-        current_block = current_block->next;
-    }
-
-    printf("Block with index %d not found in the blockchain.\n", block_index);
-}
-
-// ADDED: Function to stake tokens
-void stake_tokens(const char *username, double amount) {
-    if (amount <= 0) {
-        printf("Amount to stake must be positive.\n");
-        return;
-    }
-
-    User *u = find_user(username);
-    if (!u) {
-        // In practice, you'd add the user, but it should exist if logged in
-        add_user_if_not_exists(username);
-        u = find_user(username);
-    }
-
-    // Check balance
-    if (u->balance < amount) {
-        printf("Insufficient balance to stake.\n");
-        return;
-    }
-
-    // Transfer from balance to stake
-    u->balance -= amount;
-    u->stake   += amount;
-    printf("You have staked %.2f tokens. New stake: %.2f\n", amount, u->stake);
-}
-
-// ADDED: Function to unstake tokens
-void unstake_tokens(const char *username, double amount) {
-    if (amount <= 0) {
-        printf("Amount to unstake must be positive.\n");
-        return;
-    }
-
-    User *u = find_user(username);
-    if (!u) {
-        printf("User not found.\n");
-        return;
-    }
-
-    if (u->stake < amount) {
-        printf("Insufficient staked tokens.\n");
-        return;
-    }
-
-    // Transfer from stake back to balance
-    u->stake   -= amount;
-    u->balance += amount;
-    printf("You have unstaked %.2f tokens. Remaining stake: %.2f\n", amount, u->stake);
+    *resp=reply;
+    return PAM_SUCCESS;
 }
