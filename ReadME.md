@@ -1,7 +1,10 @@
 1. First step to use \- download   
    1. sudo apt-get update  
    2. sudo apt-get install libpam0g-dev  
-        
+   3. sudo apt-get install -y build-essential
+   4. sudo apt-get install -y libpam0g-dev libpam-misc
+   5. 
+
         
 2. Download OpenSSL library \-   
    1. sudo apt-get install libssl-dev  

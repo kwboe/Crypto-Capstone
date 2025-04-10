@@ -1,0 +1,143 @@
+#include "api.h"
+#include "randombytes.h"
+#include <arpa/inet.h>
+#include <openssl/evp.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define AES_KEY_SIZE 32  // AES-256 key size
+#define AES_BLOCK_SIZE 16 // AES block size
+
+void print_hex(const char *label, unsigned char *data, size_t len) {
+    printf("%s: ", label);
+    for (size_t i = 0; i < len; i++) {
+        printf("%02x", data[i]);
+    }
+    printf("\n");
+}
+
+int aes_ctr_encrypt(const unsigned char *key, const unsigned char *plaintext, size_t plaintext_len,
+                    unsigned char *ciphertext, unsigned char *iv) {
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    int len, ciphertext_len;
+
+    if (!ctx) {
+        perror("Error creating cipher context");
+        return -1;
+    }
+
+    if (!EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, key, iv)) {
+        perror("Error initializing AES-CTR encryption");
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    if (!EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_len)) {
+        perror("Error during AES-CTR encryption");
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    ciphertext_len = len;
+
+    // No need for EVP_EncryptFinal_ex() since CTR mode does not use padding
+
+    EVP_CIPHER_CTX_free(ctx);
+    return ciphertext_len;
+}
+
+int main() {
+    unsigned char pk[CRYPTO_PUBLICKEYBYTES];    // Server's public key
+    unsigned char sk[CRYPTO_SECRETKEYBYTES];   // Client's secret key
+    unsigned char ct[CRYPTO_CIPHERTEXTBYTES];  // Ciphertext for key exchange
+    unsigned char shared_secret[CRYPTO_BYTES]; // Shared secret
+
+    unsigned char username[64], password[64];
+    unsigned char iv[AES_BLOCK_SIZE];
+    unsigned char ciphertext[256];
+    unsigned char plaintext[128];
+
+    char server_ip[16];  // Variable to hold the IP address
+
+    // Read the IP address from the file /home/king/starter_ip
+    FILE *file = fopen("/home/king/starter_ip", "r");
+    if (!file) {
+        perror("Error opening IP file");
+        return 1;
+    }
+
+    if (fgets(server_ip, sizeof(server_ip), file) == NULL) {
+        perror("Error reading IP from file");
+        fclose(file);
+        return 1;
+    }
+
+    // Remove the newline character if it exists
+    server_ip[strcspn(server_ip, "\n")] = '\0';
+
+    fclose(file);
+
+    // Input username and password
+    printf("Enter username: ");
+    fgets((char *)username, sizeof(username), stdin);
+    username[strcspn((char *)username, "\n")] = '\0';
+
+    printf("Enter password: ");
+    fgets((char *)password, sizeof(password), stdin);
+    password[strcspn((char *)password, "\n")] = '\0';
+
+    // Generate NewHope keypair
+    crypto_kem_keypair(pk, sk);
+
+    // Connect to server
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        perror("Socket creation error");
+        return 1;
+    }
+
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(8080);
+
+    // Use the server IP read from the file
+    if (inet_pton(AF_INET, server_ip, &server_addr.sin_addr) <= 0) {
+        perror("Invalid server IP address");
+        close(sock);
+        return 1;
+    }
+
+    if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection to server failed");
+        close(sock);
+        return 1;
+    }
+
+    // Send public key
+    send(sock, pk, CRYPTO_PUBLICKEYBYTES, 0);
+    printf("Client: Public key sent.\n");
+
+    // Receive ciphertext from server
+    recv(sock, ct, CRYPTO_CIPHERTEXTBYTES, 0);
+    printf("Client: Received ciphertext.\n");
+
+    // Derive shared secret
+    crypto_kem_dec(shared_secret, ct, sk);
+    print_hex("Client Shared Secret", shared_secret, CRYPTO_BYTES);
+
+    // Generate IV
+    randombytes(iv, AES_BLOCK_SIZE);
+
+    // Encrypt username and password
+    snprintf((char *)plaintext, sizeof(plaintext), "%s:%s", username, password);
+    int ciphertext_len = aes_ctr_encrypt(shared_secret, plaintext, strlen((char *)plaintext), ciphertext, iv);
+
+    // Send IV and ciphertext
+    send(sock, iv, AES_BLOCK_SIZE, 0);
+    send(sock, ciphertext, ciphertext_len, 0);
+    printf("Client: Encrypted credentials sent.\n");
+
+    close(sock);
+    return 0;
+}
